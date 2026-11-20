@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/age_gate_screen.dart';
@@ -8,6 +9,8 @@ import 'services/session.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Enable DOM semantics so automated demos / a11y tools can find controls.
+  SemanticsBinding.instance.ensureSemantics();
   runApp(const GameMatchApp());
 }
 
