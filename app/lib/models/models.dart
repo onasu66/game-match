@@ -11,6 +11,7 @@ class User {
     this.premiumUntil,
     this.plan = 'free',
     this.maxOpenListings = 1,
+    this.pointsBalance = 0,
   });
 
   final String id;
@@ -24,6 +25,7 @@ class User {
   final String? premiumUntil;
   final String plan;
   final int maxOpenListings;
+  final int pointsBalance;
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
@@ -40,7 +42,77 @@ class User {
       premiumUntil: json['premiumUntil'] as String?,
       plan: json['plan'] as String? ?? 'free',
       maxOpenListings: json['maxOpenListings'] as int? ?? 1,
+      pointsBalance: json['pointsBalance'] as int? ?? 0,
     );
+  }
+}
+
+class PointPack {
+  PointPack({
+    required this.id,
+    required this.points,
+    required this.priceJpy,
+    required this.name,
+    required this.description,
+  });
+
+  final String id;
+  final int points;
+  final int priceJpy;
+  final String name;
+  final String description;
+
+  factory PointPack.fromJson(Map<String, dynamic> json) {
+    return PointPack(
+      id: json['id'] as String,
+      points: json['points'] as int? ?? 0,
+      priceJpy: json['priceJpy'] as int? ?? 0,
+      name: json['name'] as String? ?? '',
+      description: json['description'] as String? ?? '',
+    );
+  }
+}
+
+class PointLedgerEntry {
+  PointLedgerEntry({
+    required this.id,
+    required this.delta,
+    required this.balanceAfter,
+    required this.reason,
+    required this.createdAt,
+    this.refId,
+  });
+
+  final String id;
+  final int delta;
+  final int balanceAfter;
+  final String reason;
+  final String? refId;
+  final String createdAt;
+
+  factory PointLedgerEntry.fromJson(Map<String, dynamic> json) {
+    return PointLedgerEntry(
+      id: json['id'] as String,
+      delta: json['delta'] as int? ?? 0,
+      balanceAfter: json['balanceAfter'] as int? ?? 0,
+      reason: json['reason'] as String? ?? '',
+      refId: json['refId'] as String?,
+      createdAt: json['createdAt'] as String? ?? '',
+    );
+  }
+
+  String get labelJa {
+    if (reason.startsWith('purchase_')) return 'ポイント購入';
+    switch (reason) {
+      case 'spend_extra_listing':
+        return '追加募集';
+      case 'spend_call':
+        return '通話開始';
+      case 'call_free':
+        return '通話（無料枠）';
+      default:
+        return reason;
+    }
   }
 }
 
@@ -56,8 +128,17 @@ class BillingStatus {
     required this.productName,
     required this.stripeEnabled,
     required this.mockPurchaseAvailable,
+    required this.pointsBalance,
+    required this.packs,
+    required this.extraListingCost,
+    required this.callCost,
+    required this.freeCallsPerDay,
     this.premiumUntil,
     this.note,
+    this.history = const [],
+    this.rulesJa = const [],
+    this.freeCallsRemainingToday,
+    this.hardMaxOpenListings = 10,
   });
 
   final bool isPremium;
@@ -66,14 +147,25 @@ class BillingStatus {
   final int maxOpenListings;
   final int freeMaxOpenListings;
   final int premiumMaxOpenListings;
+  final int hardMaxOpenListings;
   final int premiumDurationDays;
   final int premiumPriceJpy;
   final String productName;
   final bool stripeEnabled;
   final bool mockPurchaseAvailable;
   final String? note;
+  final int pointsBalance;
+  final List<PointPack> packs;
+  final int extraListingCost;
+  final int callCost;
+  final int freeCallsPerDay;
+  final int? freeCallsRemainingToday;
+  final List<PointLedgerEntry> history;
+  final List<String> rulesJa;
 
   factory BillingStatus.fromJson(Map<String, dynamic> json) {
+    final costs = json['costs'] as Map<String, dynamic>? ?? {};
+    final consumption = json['consumption'] as Map<String, dynamic>? ?? {};
     return BillingStatus(
       isPremium: json['isPremium'] as bool? ?? false,
       premiumUntil: json['premiumUntil'] as String?,
@@ -81,12 +173,33 @@ class BillingStatus {
       maxOpenListings: json['maxOpenListings'] as int? ?? 1,
       freeMaxOpenListings: json['freeMaxOpenListings'] as int? ?? 1,
       premiumMaxOpenListings: json['premiumMaxOpenListings'] as int? ?? 5,
+      hardMaxOpenListings: json['hardMaxOpenListings'] as int? ?? 10,
       premiumDurationDays: json['premiumDurationDays'] as int? ?? 30,
       premiumPriceJpy: json['premiumPriceJpy'] as int? ?? 480,
       productName: json['productName'] as String? ?? 'プレミアム',
       stripeEnabled: json['stripeEnabled'] as bool? ?? false,
       mockPurchaseAvailable: json['mockPurchaseAvailable'] as bool? ?? false,
       note: json['note'] as String?,
+      pointsBalance: json['pointsBalance'] as int? ?? 0,
+      packs: (json['packs'] as List<dynamic>? ?? [])
+          .map((e) => PointPack.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      extraListingCost: costs['extraListing'] as int? ??
+          consumption['extraListingCostPoints'] as int? ??
+          50,
+      callCost: costs['call'] as int? ??
+          consumption['callCostPoints'] as int? ??
+          20,
+      freeCallsPerDay: costs['freeCallsPerDay'] as int? ??
+          consumption['freeCallsPerDay'] as int? ??
+          1,
+      freeCallsRemainingToday: json['freeCallsRemainingToday'] as int?,
+      history: (json['history'] as List<dynamic>? ?? [])
+          .map((e) => PointLedgerEntry.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      rulesJa: (consumption['rulesJa'] as List<dynamic>? ?? [])
+          .map((e) => e.toString())
+          .toList(),
     );
   }
 }
@@ -230,12 +343,20 @@ class CallCredentials {
     required this.token,
     required this.roomName,
     required this.identity,
+    this.pointsSpent = 0,
+    this.usedFreeQuota = false,
+    this.pointsBalance,
+    this.freeCallsRemainingToday,
   });
 
   final String url;
   final String token;
   final String roomName;
   final String identity;
+  final int pointsSpent;
+  final bool usedFreeQuota;
+  final int? pointsBalance;
+  final int? freeCallsRemainingToday;
 
   factory CallCredentials.fromJson(Map<String, dynamic> json) {
     return CallCredentials(
@@ -243,6 +364,10 @@ class CallCredentials {
       token: json['token'] as String,
       roomName: json['roomName'] as String,
       identity: json['identity'] as String? ?? '',
+      pointsSpent: json['pointsSpent'] as int? ?? 0,
+      usedFreeQuota: json['usedFreeQuota'] as bool? ?? false,
+      pointsBalance: json['pointsBalance'] as int?,
+      freeCallsRemainingToday: json['freeCallsRemainingToday'] as int?,
     );
   }
 }

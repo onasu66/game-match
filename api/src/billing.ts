@@ -1,16 +1,59 @@
-/** Premium plan + Stripe Checkout (Web). Native IAP is out of scope for this MVP. */
+/** Points-first billing + legacy premium. Stripe Checkout (Web). Native IAP is out of scope. */
 
 export const FREE_MAX_OPEN_LISTINGS = 1;
 export const PREMIUM_MAX_OPEN_LISTINGS = 5;
+export const HARD_MAX_OPEN_LISTINGS = 10;
 export const PREMIUM_DURATION_DAYS = 30;
-/** JPY — Stripe Checkout `price_data` when STRIPE_PRICE_ID is unset. */
+/** JPY — legacy premium Checkout when STRIPE_PRICE_ID is unset. */
 export const PREMIUM_PRICE_JPY = 480;
 export const PREMIUM_PRODUCT_NAME = "ゲーム通話 プレミアム（30日）";
+
+/** Extra open listing beyond free/premium quota. */
+export const POINTS_COST_EXTRA_LISTING = 50;
+/** Call start after the daily free quota. */
+export const POINTS_COST_CALL = 20;
+/** Free call-token issuances per UTC calendar day. */
+export const FREE_CALLS_PER_DAY = 1;
+
+export type PointPackId = "points_100" | "points_500" | "points_1000";
+export type BillableProductId = PointPackId | "premium_30d";
+
+export type PointPack = {
+  id: PointPackId;
+  points: number;
+  priceJpy: number;
+  name: string;
+  description: string;
+};
+
+export const POINT_PACKS: PointPack[] = [
+  {
+    id: "points_100",
+    points: 100,
+    priceJpy: 120,
+    name: "ポイント 100",
+    description: "追加募集・通話に使えるポイント 100",
+  },
+  {
+    id: "points_500",
+    points: 500,
+    priceJpy: 480,
+    name: "ポイント 500",
+    description: "追加募集・通話に使えるポイント 500",
+  },
+  {
+    id: "points_1000",
+    points: 1000,
+    priceJpy: 900,
+    name: "ポイント 1000",
+    description: "追加募集・通話に使えるポイント 1000",
+  },
+];
 
 export type BillingConfig = {
   stripeSecretKey: string | null;
   stripeWebhookSecret: string | null;
-  /** Optional Stripe Price ID. When null, Checkout uses inline price_data. */
+  /** Optional Stripe Price ID for legacy premium only. */
   stripePriceId: string | null;
   successUrl: string;
   cancelUrl: string;
@@ -75,6 +118,21 @@ export function maxOpenListingsFor(premium: boolean): number {
   return premium ? PREMIUM_MAX_OPEN_LISTINGS : FREE_MAX_OPEN_LISTINGS;
 }
 
+export function pointsBalanceOf(user: {
+  points_balance?: number | null;
+}): number {
+  const n = Number(user.points_balance ?? 0);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+export function getPointPack(id: string): PointPack | null {
+  return POINT_PACKS.find((p) => p.id === id) ?? null;
+}
+
+export function isBillableProductId(id: string): id is BillableProductId {
+  return id === "premium_30d" || !!getPointPack(id);
+}
+
 export function extendPremiumUntil(
   currentUntil: string | null | undefined,
   now = new Date(),
@@ -86,11 +144,37 @@ export function extendPremiumUntil(
   return next.toISOString();
 }
 
+/** UTC YYYY-MM-DD for daily free-call window. */
+export function utcDayKey(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+export function consumptionRulesPayload() {
+  return {
+    model: "points_primary" as const,
+    coexistence:
+      "ポイントが主課金。プレミアム（30日）は共存し、同時募集の無料枠を広げる。",
+    freeOpenListings: FREE_MAX_OPEN_LISTINGS,
+    premiumOpenListings: PREMIUM_MAX_OPEN_LISTINGS,
+    hardMaxOpenListings: HARD_MAX_OPEN_LISTINGS,
+    extraListingCostPoints: POINTS_COST_EXTRA_LISTING,
+    freeCallsPerDay: FREE_CALLS_PER_DAY,
+    callCostPoints: POINTS_COST_CALL,
+    rulesJa: [
+      `募集作成: 無料で同時 ${FREE_MAX_OPEN_LISTINGS} 件。それ以上は ${POINTS_COST_EXTRA_LISTING} pt/件（上限 ${HARD_MAX_OPEN_LISTINGS}）。`,
+      `プレミアム中は同時募集の無料枠が ${PREMIUM_MAX_OPEN_LISTINGS} 件（ポイント不要）。枠超過分は同じく ${POINTS_COST_EXTRA_LISTING} pt。`,
+      `通話開始: 1日あたり無料 ${FREE_CALLS_PER_DAY} 回。超過は ${POINTS_COST_CALL} pt/回。`,
+    ],
+  };
+}
+
 export function billingStatusPayload(user: {
   premium_until?: string | null;
+  points_balance?: number | null;
 }) {
   const premiumUntil = user.premium_until ?? null;
   const isPremium = isPremiumActive(premiumUntil);
+  const pointsBalance = pointsBalanceOf(user);
   return {
     isPremium,
     premiumUntil,
@@ -98,9 +182,24 @@ export function billingStatusPayload(user: {
     maxOpenListings: maxOpenListingsFor(isPremium),
     freeMaxOpenListings: FREE_MAX_OPEN_LISTINGS,
     premiumMaxOpenListings: PREMIUM_MAX_OPEN_LISTINGS,
+    hardMaxOpenListings: HARD_MAX_OPEN_LISTINGS,
     premiumDurationDays: PREMIUM_DURATION_DAYS,
     premiumPriceJpy: PREMIUM_PRICE_JPY,
     productName: PREMIUM_PRODUCT_NAME,
+    pointsBalance,
+    packs: POINT_PACKS.map((p) => ({
+      id: p.id,
+      points: p.points,
+      priceJpy: p.priceJpy,
+      name: p.name,
+      description: p.description,
+    })),
+    costs: {
+      extraListing: POINTS_COST_EXTRA_LISTING,
+      call: POINTS_COST_CALL,
+      freeCallsPerDay: FREE_CALLS_PER_DAY,
+    },
+    consumption: consumptionRulesPayload(),
   };
 }
 
@@ -114,8 +213,9 @@ export async function createStripeCheckoutSession(opts: {
   config: BillingConfig;
   userId: string;
   email: string;
+  product: BillableProductId;
 }): Promise<{ id: string; url: string }> {
-  const { config, userId, email } = opts;
+  const { config, userId, email, product } = opts;
   if (!config.stripeSecretKey) {
     throw new Error("STRIPE_SECRET_KEY is not set");
   }
@@ -127,18 +227,29 @@ export async function createStripeCheckoutSession(opts: {
     client_reference_id: userId,
     customer_email: email,
     "metadata[userId]": userId,
-    "metadata[product]": "premium_30d",
+    "metadata[product]": product,
     "line_items[0][quantity]": "1",
   };
 
-  if (config.stripePriceId) {
-    params["line_items[0][price]"] = config.stripePriceId;
+  if (product === "premium_30d") {
+    if (config.stripePriceId) {
+      params["line_items[0][price]"] = config.stripePriceId;
+    } else {
+      params["line_items[0][price_data][currency]"] = "jpy";
+      params["line_items[0][price_data][unit_amount]"] = String(PREMIUM_PRICE_JPY);
+      params["line_items[0][price_data][product_data][name]"] =
+        PREMIUM_PRODUCT_NAME;
+      params["line_items[0][price_data][product_data][description]"] =
+        `同時募集 ${PREMIUM_MAX_OPEN_LISTINGS} 件まで + プレミアムバッジ（${PREMIUM_DURATION_DAYS}日間）`;
+    }
   } else {
+    const pack = getPointPack(product)!;
     params["line_items[0][price_data][currency]"] = "jpy";
-    params["line_items[0][price_data][unit_amount]"] = String(PREMIUM_PRICE_JPY);
-    params["line_items[0][price_data][product_data][name]"] = PREMIUM_PRODUCT_NAME;
+    params["line_items[0][price_data][unit_amount]"] = String(pack.priceJpy);
+    params["line_items[0][price_data][product_data][name]"] = pack.name;
     params["line_items[0][price_data][product_data][description]"] =
-      `同時募集 ${PREMIUM_MAX_OPEN_LISTINGS} 件まで + プレミアムバッジ（${PREMIUM_DURATION_DAYS}日間）`;
+      pack.description;
+    params["metadata[points]"] = String(pack.points);
   }
 
   const res = await fetch("https://api.stripe.com/v1/checkout/sessions", {

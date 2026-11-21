@@ -131,7 +131,7 @@ async function main() {
     assert(typeof payload.sub === "string" && payload.sub.length > 0, "token sub missing");
   }
 
-  // Free tier: second open listing as host should be blocked
+  // Free tier: second open listing without points should be blocked (402)
   const second = await req("/listings", {
     method: "POST",
     headers: { Authorization: `Bearer ${hostToken}` },
@@ -141,7 +141,10 @@ async function main() {
       description: "should fail for free",
     }),
   });
-  assert(second.status === 403, `expected free listing limit 403, got ${second.status}`);
+  assert(
+    second.status === 402 || second.status === 403,
+    `expected free listing limit 402/403, got ${second.status}`,
+  );
 
   const billing = await req("/billing/status", {
     headers: { Authorization: `Bearer ${hostToken}` },
@@ -149,27 +152,47 @@ async function main() {
   assert(billing.status === 200, `billing status failed: ${JSON.stringify(billing.json)}`);
   assert(billing.json.isPremium === false, "expected free plan");
   assert(billing.json.maxOpenListings === 1, "expected free maxOpenListings=1");
+  assert(billing.json.pointsBalance === 0, "expected 0 points");
+  assert(
+    Array.isArray(billing.json.packs) && billing.json.packs.length >= 3,
+    "expected point packs",
+  );
+  assert(billing.json.costs?.extraListing === 50, "expected extra listing cost 50");
+  assert(billing.json.costs?.call === 20, "expected call cost 20");
 
   if (billing.json.mockPurchaseAvailable) {
-    const mock = await req("/billing/mock-purchase", {
+    const mockPts = await req("/billing/mock-purchase", {
       method: "POST",
       headers: { Authorization: `Bearer ${hostToken}` },
-      body: "{}",
+      body: JSON.stringify({ product: "points_100" }),
     });
-    assert(mock.status === 200, `mock purchase failed: ${JSON.stringify(mock.json)}`);
-    assert(mock.json.isPremium === true, "expected premium after mock");
-    assert(mock.json.user?.isPremium === true, "user.isPremium should be true");
+    assert(mockPts.status === 200, `mock points failed: ${JSON.stringify(mockPts.json)}`);
+    assert(mockPts.json.pointsBalance === 100, "expected 100 points");
+    assert(mockPts.json.user?.pointsBalance === 100, "user.pointsBalance should be 100");
 
-    const third = await req("/listings", {
+    const paidListing = await req("/listings", {
       method: "POST",
       headers: { Authorization: `Bearer ${hostToken}` },
       body: JSON.stringify({
         game: "Minecraft",
         slots: 3,
-        description: "premium second listing",
+        description: "points-paid second listing",
       }),
     });
-    assert(third.status === 201, `premium second listing failed: ${JSON.stringify(third.json)}`);
+    assert(
+      paidListing.status === 201,
+      `points listing failed: ${JSON.stringify(paidListing.json)}`,
+    );
+    assert(paidListing.json.pointsSpent === 50, "expected 50 points spent");
+    assert(paidListing.json.pointsBalance === 50, "expected 50 points left");
+
+    const mockPrem = await req("/billing/mock-purchase", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${hostToken}` },
+      body: JSON.stringify({ product: "premium_30d" }),
+    });
+    assert(mockPrem.status === 200, `mock premium failed: ${JSON.stringify(mockPrem.json)}`);
+    assert(mockPrem.json.isPremium === true, "expected premium after mock");
   }
 
   // Ratings + reports
@@ -264,8 +287,10 @@ async function main() {
         members: detail.json.listing.members.map((m: { displayName: string }) => m.displayName),
         callTokenStatus: call.status,
         roomName: call.json.roomName ?? null,
+        pointsSpentOnCall: call.json.pointsSpent ?? null,
         billing: {
           isPremium: billing.json.isPremium,
+          pointsBalance: billing.json.pointsBalance,
           mockPurchaseAvailable: billing.json.mockPurchaseAvailable,
         },
         ratings: hostSummary.json.summary,

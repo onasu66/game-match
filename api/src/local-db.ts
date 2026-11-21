@@ -16,6 +16,11 @@ function migrateLocalSchema(sqlite: Database.Database) {
   if (!names.has("stripe_customer_id")) {
     sqlite.exec("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT");
   }
+  if (!names.has("points_balance")) {
+    sqlite.exec(
+      "ALTER TABLE users ADD COLUMN points_balance INTEGER NOT NULL DEFAULT 0",
+    );
+  }
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS purchases (
       id TEXT PRIMARY KEY,
@@ -29,6 +34,18 @@ function migrateLocalSchema(sqlite: Database.Database) {
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id);
+    CREATE TABLE IF NOT EXISTS point_ledger (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      delta INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      ref_id TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_point_ledger_user ON point_ledger(user_id);
+    CREATE INDEX IF NOT EXISTS idx_point_ledger_user_created ON point_ledger(user_id, created_at);
   `);
 }
 
