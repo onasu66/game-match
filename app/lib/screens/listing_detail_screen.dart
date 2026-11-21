@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/api_client.dart';
 import '../services/session.dart';
+import 'call_screen.dart';
 
 class ListingDetailScreen extends StatefulWidget {
   const ListingDetailScreen({super.key, required this.listingId});
@@ -56,6 +57,17 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     } finally {
       if (mounted) setState(() => _joining = false);
     }
+  }
+
+  void _openCall(Listing listing) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => CallScreen(
+          listingId: listing.id,
+          gameTitle: listing.game,
+        ),
+      ),
+    );
   }
 
   @override
@@ -120,8 +132,20 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                   onPressed: _joining ? null : _join,
                   child: Text(_joining ? '参加中…' : 'この募集に参加'),
                 )
-              else
+              else ...[
                 const Text('すでに参加しています'),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: () => _openCall(l),
+                  icon: const Icon(Icons.headset_mic),
+                  label: const Text('通話ルームに入る'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'マイクなしでも参加できます。入室後にミュート解除できます。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ],
           );
         },

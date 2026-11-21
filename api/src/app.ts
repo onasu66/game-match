@@ -11,6 +11,11 @@ import {
   verifyPassword,
   verifyToken,
 } from "./auth.js";
+import {
+  createLiveKitAccessToken,
+  listingRoomName,
+  type LiveKitConfig,
+} from "./livekit.js";
 import type { ListingRow, MatchDb, MembershipRow, UserRow } from "./types.js";
 
 export type AppEnv = {
@@ -18,12 +23,14 @@ export type AppEnv = {
     userId: string;
     db: MatchDb;
     jwtSecret: string;
+    livekit: LiveKitConfig | null;
   };
 };
 
 export type CreateAppOptions = {
   getDb: (c: { env?: unknown }) => MatchDb;
   getJwtSecret: (c: { env?: unknown }) => string;
+  getLiveKitConfig: (c: { env?: unknown }) => LiveKitConfig | null;
 };
 
 function parseBearer(header: string | undefined): string | null {
@@ -92,6 +99,7 @@ export function createApp(options: CreateAppOptions) {
   app.use("*", async (c, next) => {
     c.set("db", options.getDb(c as never));
     c.set("jwtSecret", options.getJwtSecret(c as never));
+    c.set("livekit", options.getLiveKitConfig(c as never));
     await next();
   });
 
@@ -196,7 +204,7 @@ export function createApp(options: CreateAppOptions) {
 
   async function authenticate(c: {
     req: { header: (name: string) => string | undefined };
-    get: (key: "db" | "jwtSecret" | "userId") => unknown;
+    get: (key: "db" | "jwtSecret" | "userId" | "livekit") => unknown;
     set: (key: "userId", value: string) => void;
   }) {
     const token = parseBearer(c.req.header("Authorization"));
@@ -204,10 +212,15 @@ export function createApp(options: CreateAppOptions) {
     const userId = await verifyToken(token, c.get("jwtSecret") as string);
     if (!userId) throw new HTTPException(401, { message: "トークンが無効です" });
     const user = await (c.get("db") as MatchDb).first<UserRow>(
-      "SELECT id FROM users WHERE id = ?",
+      "SELECT id, birth_date FROM users WHERE id = ?",
       userId,
     );
     if (!user) throw new HTTPException(401, { message: "ユーザーが見つかりません" });
+    if (!isAtLeast18(user.birth_date)) {
+      throw new HTTPException(403, {
+        message: "年齢確認済みのユーザーのみ利用できます",
+      });
+    }
     c.set("userId", userId);
   }
 
@@ -374,6 +387,67 @@ export function createApp(options: CreateAppOptions) {
     );
     const detail = await listingDetail(db, listingId);
     return c.json({ listing: detail, alreadyJoined: false });
+  });
+
+  /**
+   * Issue LiveKit room credentials for a listing the caller has joined.
+   * Mic is optional on the client; this token still allows publish so unmute works later.
+   */
+  app.post("/listings/:id/call-token", async (c) => {
+    const livekit = c.get("livekit");
+    if (!livekit) {
+      throw new HTTPException(503, {
+        message:
+          "LiveKit が未設定です（LIVEKIT_API_KEY / LIVEKIT_API_SECRET が必要）",
+      });
+    }
+
+    const db = c.get("db");
+    const listingId = c.req.param("id");
+    const userId = c.get("userId");
+    const listing = await db.first<ListingRow>(
+      "SELECT * FROM listings WHERE id = ?",
+      listingId,
+    );
+    if (!listing) {
+      throw new HTTPException(404, { message: "募集が見つかりません" });
+    }
+
+    const membership = await db.first<{ user_id: string }>(
+      "SELECT user_id FROM memberships WHERE listing_id = ? AND user_id = ?",
+      listingId,
+      userId,
+    );
+    if (!membership) {
+      throw new HTTPException(403, {
+        message: "通話に入るには募集への参加が必要です",
+      });
+    }
+
+    const user = await db.first<UserRow>(
+      "SELECT * FROM users WHERE id = ?",
+      userId,
+    );
+    if (!user || !isAtLeast18(user.birth_date)) {
+      throw new HTTPException(403, {
+        message: "年齢確認済みのユーザーのみ通話できます",
+      });
+    }
+
+    const roomName = listingRoomName(listingId);
+    const token = await createLiveKitAccessToken({
+      config: livekit,
+      identity: userId,
+      name: user.display_name,
+      roomName,
+    });
+
+    return c.json({
+      url: livekit.url,
+      token,
+      roomName,
+      identity: userId,
+    });
   });
 
   app.onError((err, c) => {
