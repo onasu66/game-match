@@ -90,14 +90,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _startCheckout() async {
+  Future<void> _startCheckout(String product) async {
     setState(() {
       _billingBusy = true;
       _billingError = null;
     });
     try {
-      final session =
-          await context.read<SessionController>().api.createCheckout();
+      final session = await context
+          .read<SessionController>()
+          .api
+          .createCheckout(product: product);
       final ok = await launchUrl(
         Uri.parse(session.url),
         mode: LaunchMode.externalApplication,
@@ -117,19 +119,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _mockPurchase() async {
+  Future<void> _mockPurchase(String product) async {
     setState(() {
       _billingBusy = true;
       _billingError = null;
     });
     final session = context.read<SessionController>();
     try {
-      final result = await session.api.mockPurchase();
+      final result = await session.api.mockPurchase(product: product);
       await session.applyUser(result.user);
       if (!mounted) return;
       setState(() => _billing = result.status);
+      final label = product.startsWith('points_') ? 'ポイント' : 'プレミアム';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('プレミアムを有効化しました（モック）')),
+        SnackBar(content: Text('$labelを付与しました（モック）')),
       );
     } on ApiException catch (e) {
       if (mounted) setState(() => _billingError = e.message);
@@ -144,7 +147,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final billing = _billing;
     final isPremium = billing?.isPremium ?? user.isPremium;
     final premiumUntil = billing?.premiumUntil ?? user.premiumUntil;
-    final maxOpen = billing?.maxOpenListings ?? user.maxOpenListings;
+    final points = billing?.pointsBalance ?? user.pointsBalance;
+    final packs = billing?.packs ?? const <PointPack>[];
+    final rules = billing?.rulesJa ?? const <String>[];
 
     return Scaffold(
       appBar: AppBar(
@@ -240,24 +245,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
               '（${_ratingSummary!.count}件）',
             ),
           const SizedBox(height: 32),
-          Text('プラン', style: Theme.of(context).textTheme.titleMedium),
+          Text('ポイント', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
           Text(
-            isPremium
-                ? 'プレミアム（同時募集 $maxOpen 件）'
-                : '無料（同時募集 $maxOpen 件）',
+            '残高: $points pt',
+            style: Theme.of(context).textTheme.headlineSmall,
           ),
-          if (isPremium && premiumUntil != null)
+          if (billing?.freeCallsRemainingToday != null)
             Text(
-              '有効期限: $premiumUntil',
+              '本日の無料通話 残り ${billing!.freeCallsRemainingToday} 回',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           const SizedBox(height: 8),
           Text(
-            '同時募集: 無料 ${billing?.freeMaxOpenListings ?? 1} → プレミアム ${billing?.premiumMaxOpenListings ?? 5}。'
-            ' Web 決済（Stripe）。アプリ内課金は後続。',
+            'ポイントが主課金です。プレミアム（30日）は共存し、同時募集の無料枠を広げます。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          if (rules.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ...rules.map(
+              (r) => Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('・$r', style: Theme.of(context).textTheme.bodySmall),
+              ),
+            ),
+          ] else ...[
+            const SizedBox(height: 8),
+            Text(
+              '・募集: 無料同時 ${(billing?.freeMaxOpenListings ?? 1)} 件、追加 ${(billing?.extraListingCost ?? 50)} pt\n'
+              '・通話: 1日 ${(billing?.freeCallsPerDay ?? 1)} 回無料、超過 ${(billing?.callCost ?? 20)} pt',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           if (_billingError != null) ...[
             const SizedBox(height: 8),
             Text(
@@ -265,33 +284,98 @@ class _ProfileScreenState extends State<ProfileScreen> {
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ],
-          const SizedBox(height: 12),
-          if (!isPremium) ...[
-            if (billing?.stripeEnabled == true)
-              FilledButton.tonal(
-                onPressed: _billingBusy ? null : _startCheckout,
-                child: Text(
-                  _billingBusy
-                      ? '準備中…'
-                      : 'プレミアムを購入（¥${billing?.premiumPriceJpy ?? 480}）',
+          const SizedBox(height: 16),
+          Text('ポイントを購入', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          if (packs.isEmpty)
+            const Text('パック情報を読み込み中…')
+          else
+            ...packs.map((pack) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text('${pack.name} · ¥${pack.priceJpy}'),
+                    ),
+                    if (billing?.stripeEnabled == true)
+                      FilledButton.tonal(
+                        onPressed:
+                            _billingBusy ? null : () => _startCheckout(pack.id),
+                        child: Text(_billingBusy ? '…' : '購入'),
+                      ),
+                    if (billing?.mockPurchaseAvailable == true) ...[
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: _billingBusy
+                            ? null
+                            : () => _mockPurchase(pack.id),
+                        child: const Text('モック'),
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-            if (billing?.mockPurchaseAvailable == true) ...[
-              if (billing?.stripeEnabled == true) const SizedBox(height: 8),
-              OutlinedButton(
-                onPressed: _billingBusy ? null : _mockPurchase,
-                child: const Text('モック購入（開発用）'),
-              ),
-            ],
-            if (billing != null &&
-                billing.stripeEnabled != true &&
-                billing.mockPurchaseAvailable != true)
-              const Text('現在購入手段が利用できません。'),
-          ] else
+              );
+            }),
+          if (billing != null &&
+              billing.stripeEnabled != true &&
+              billing.mockPurchaseAvailable != true)
+            const Text('現在購入手段が利用できません。'),
+          const SizedBox(height: 24),
+          Text('ポイント履歴', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          if (billing == null)
+            const Text('読み込み中…')
+          else if (billing.history.isEmpty)
             Text(
-              'すでにプレミアムです。再購入で期限を延長できます。',
+              'まだ履歴がありません',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            ...billing.history.take(15).map((e) {
+              final sign = e.delta > 0 ? '+' : '';
+              return ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(e.labelJa),
+                subtitle: Text(e.createdAt),
+                trailing: Text('$sign${e.delta} → ${e.balanceAfter}'),
+              );
+            }),
+          const SizedBox(height: 24),
+          Text('プレミアム（任意）', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Text(
+            isPremium
+                ? 'プレミアム有効（同時募集無料枠 ${billing?.premiumMaxOpenListings ?? 5} 件）'
+                : '未加入。同時募集無料枠を ${billing?.premiumMaxOpenListings ?? 5} 件に広げます（¥${billing?.premiumPriceJpy ?? 480} / ${billing?.premiumDurationDays ?? 30}日）。',
+          ),
+          if (isPremium && premiumUntil != null)
+            Text(
+              '有効期限: $premiumUntil',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+          const SizedBox(height: 8),
+          if (billing?.stripeEnabled == true)
+            FilledButton.tonal(
+              onPressed:
+                  _billingBusy ? null : () => _startCheckout('premium_30d'),
+              child: Text(
+                _billingBusy
+                    ? '準備中…'
+                    : isPremium
+                        ? 'プレミアムを延長'
+                        : 'プレミアムを購入',
+              ),
+            ),
+          if (billing?.mockPurchaseAvailable == true) ...[
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed:
+                  _billingBusy ? null : () => _mockPurchase('premium_30d'),
+              child: const Text('プレミアム モック購入'),
+            ),
+          ],
         ],
       ),
     );

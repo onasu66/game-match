@@ -33,14 +33,17 @@ game-match/
 ルーム名: `listing-<listingId>`  
 LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 
-## 課金（MVP）
+## 課金（ポイント制・プレミアム共存）
 
-**方式: Stripe Checkout（Web 決済）。App Store / Google Play のアプリ内課金は後続。**
+**主課金はポイント。Stripe Checkout（Web）。App Store / Google Play のアプリ内課金は後続。**
 
-- 商品: プレミアム 30 日（¥480、Price ID 未設定時は API 側 `price_data`）
-- 無料との差分: 同時公開募集数（無料 1 / プレミアム 5）+ プレミアムバッジ
-- UI は専用画面を増やず、既存プロフィールに配置
-- Stripe 未設定時は `POST /billing/mock-purchase` が有効
+- ポイントパック: 100（¥120）/ 500（¥480）/ 1000（¥900）
+- 消費:
+  - 募集作成: 同時公開は無料 1 件。追加は **50 pt**/件（上限 10）。プレミアム中は無料枠 **5** 件
+  - 通話開始: 1 日 **1 回**無料。超過は **20 pt**/回
+- プレミアム（30 日・¥480）は任意で共存（無料枠拡大 + バッジ）
+- UI は専用画面を増やず、既存プロフィールに残高・購入・履歴を配置
+- Stripe 未設定時は `POST /billing/mock-purchase`（`product` 指定）が有効
 
 必要な Worker シークレット名（値はリポジトリ・チャットに出さない）:
 
@@ -50,7 +53,7 @@ LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 | `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | 通話 | LiveKit |
 | `STRIPE_SECRET_KEY` | 本番課金 | Stripe シークレット |
 | `STRIPE_WEBHOOK_SECRET` | 本番課金 | Webhook 署名検証 |
-| `STRIPE_PRICE_ID` | 任意 | 固定 Price。未設定時は inline price_data |
+| `STRIPE_PRICE_ID` | 任意 | レガシープレミアム用固定 Price |
 | `ALLOW_MOCK_PURCHASE` | 任意 | 本番は `0` 推奨 |
 
 ## 本番デプロイ（Cloudflare）
@@ -60,6 +63,7 @@ LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 - リポジトリ: https://github.com/onasu66/game-match
 - 課金スキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/001_billing.sql`
 - 評価・通報スキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/002_ratings_reports.sql`
+- ポイントスキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/003_points.sql`
 
 必要な Worker シークレット:
 
@@ -140,8 +144,9 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 | POST | `/listings/:id/reports` | 参加者を通報（理由 + 任意コメント） |
 | GET | `/ratings/me` | 自分への評価サマリ |
 | GET | `/reports/reasons` | 通報理由一覧 |
-| GET | `/billing/status` | プラン状態 |
-| POST | `/billing/checkout` | Stripe Checkout URL |
+| GET | `/billing/status` | ポイント残高・パック・消費ルール・履歴 |
+| GET | `/billing/history` | ポイント履歴 |
+| POST | `/billing/checkout` | Stripe Checkout（`product`: points_* / premium_30d） |
 | POST | `/billing/confirm` | Checkout 完了後の付与確認 |
-| POST | `/billing/mock-purchase` | 開発用モック購入 |
+| POST | `/billing/mock-purchase` | 開発用モック購入（同上 product） |
 | POST | `/billing/webhook` | Stripe Webhook |

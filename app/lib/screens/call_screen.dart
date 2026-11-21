@@ -119,6 +119,19 @@ class _CallScreenState extends State<CallScreen> {
         _micEnabled = false;
         _remotes = room.remoteParticipants.values.toList();
       });
+      if (creds.usedFreeQuota) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('本日の無料通話枠を使用しました')),
+        );
+      } else if (creds.pointsSpent > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${creds.pointsSpent}pt を消費しました（残高 ${creds.pointsBalance ?? '-'}）',
+            ),
+          ),
+        );
+      }
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {

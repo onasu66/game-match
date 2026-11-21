@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   favorite_games TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   premium_until TEXT,
-  stripe_customer_id TEXT
+  stripe_customer_id TEXT,
+  points_balance INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS listings (
@@ -73,7 +74,20 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE INDEX IF NOT EXISTS idx_listings_game ON listings(game);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
+CREATE TABLE IF NOT EXISTS point_ledger (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  delta INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  ref_id TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id);
+CREATE INDEX IF NOT EXISTS idx_point_ledger_user ON point_ledger(user_id);
+CREATE INDEX IF NOT EXISTS idx_point_ledger_user_created ON point_ledger(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_ratings_to_user ON ratings(to_user_id);
 CREATE INDEX IF NOT EXISTS idx_ratings_listing ON ratings(listing_id);
 CREATE INDEX IF NOT EXISTS idx_reports_reported ON reports(reported_user_id);

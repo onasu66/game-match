@@ -8,6 +8,17 @@ export type UserRow = {
   created_at: string;
   premium_until?: string | null;
   stripe_customer_id?: string | null;
+  points_balance?: number | null;
+};
+
+export type PointLedgerRow = {
+  id: string;
+  user_id: string;
+  delta: number;
+  balance_after: number;
+  reason: string;
+  ref_id: string | null;
+  created_at: string;
 };
 
 export type PurchaseRow = {

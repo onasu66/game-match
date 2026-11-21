@@ -96,10 +96,15 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('マイクは任意'),
-            subtitle: const Text('通話接続は後続MVP。今はフラグのみ保存します。'),
+            subtitle: const Text('入室時はミュート可。通話は LiveKit。'),
             value: _voiceOptional,
             onChanged: (v) => setState(() => _voiceOptional = v),
           ),
+          Text(
+            '同時募集は無料1件まで。追加は50pt（プレミアム中は無料枠5件）。残高はプロフィールで確認。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
           if (_error != null) ...[
             Text(
               _error!,

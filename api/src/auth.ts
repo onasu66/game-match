@@ -1,6 +1,10 @@
 import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
-import { isPremiumActive, maxOpenListingsFor } from "./billing.js";
+import {
+  isPremiumActive,
+  maxOpenListingsFor,
+  pointsBalanceOf,
+} from "./billing.js";
 
 const encoder = new TextEncoder();
 
@@ -62,6 +66,7 @@ export function publicUser(row: {
   favorite_games: string;
   created_at: string;
   premium_until?: string | null;
+  points_balance?: number | null;
 }) {
   let favoriteGames: string[] = [];
   try {
@@ -83,5 +88,6 @@ export function publicUser(row: {
     premiumUntil,
     plan: isPremium ? ("premium" as const) : ("free" as const),
     maxOpenListings: maxOpenListingsFor(isPremium),
+    pointsBalance: pointsBalanceOf(row),
   };
 }

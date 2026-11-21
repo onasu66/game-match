@@ -34,6 +34,9 @@ npx wrangler d1 execute game-match-db --remote --file=./migrations/001_billing.s
 # 3c2) 評価・通報スキーマ（既存 D1 向け。新規は schema.sql に含まれる）
 npx wrangler d1 execute game-match-db --remote --file=./migrations/002_ratings_reports.sql
 
+# 3c3) ポイント残高・台帳（既存 D1 向け。新規は schema.sql に含まれる）
+npx wrangler d1 execute game-match-db --remote --file=./migrations/003_points.sql
+
 # 3d) Stripe（Web Checkout。値をログに出さない）
 npx wrangler secret put STRIPE_SECRET_KEY
 npx wrangler secret put STRIPE_WEBHOOK_SECRET

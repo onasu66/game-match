@@ -15,11 +15,20 @@ import {
   billingStatusPayload,
   createStripeCheckoutSession,
   extendPremiumUntil,
+  FREE_CALLS_PER_DAY,
+  getPointPack,
+  HARD_MAX_OPEN_LISTINGS,
+  isBillableProductId,
   isPremiumActive,
   maxOpenListingsFor,
+  POINTS_COST_CALL,
+  POINTS_COST_EXTRA_LISTING,
+  pointsBalanceOf,
   PREMIUM_PRICE_JPY,
   retrieveStripeCheckoutSession,
+  utcDayKey,
   verifyStripeWebhookSignature,
+  type BillableProductId,
   type BillingConfig,
 } from "./billing.js";
 import {
@@ -31,6 +40,7 @@ import type {
   ListingRow,
   MatchDb,
   MembershipRow,
+  PointLedgerRow,
   RatingRow,
   UserRow,
 } from "./types.js";
@@ -152,6 +162,45 @@ async function assertListingMember(
   }
 }
 
+async function applyPointDelta(opts: {
+  db: MatchDb;
+  userId: string;
+  delta: number;
+  reason: string;
+  refId?: string | null;
+}) {
+  const { db, userId, delta, reason, refId } = opts;
+  const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+  if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+  const current = pointsBalanceOf(user);
+  const next = current + delta;
+  if (next < 0) {
+    throw new HTTPException(402, {
+      message: `ポイントが不足しています（残高 ${current} / 必要 ${Math.abs(delta)}）`,
+    });
+  }
+  const createdAt = new Date().toISOString();
+  const ledgerId = uuidv4();
+  await db.run(
+    "UPDATE users SET points_balance = ? WHERE id = ?",
+    next,
+    userId,
+  );
+  await db.run(
+    `INSERT INTO point_ledger (id, user_id, delta, balance_after, reason, ref_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ledgerId,
+    userId,
+    delta,
+    next,
+    reason,
+    refId ?? null,
+    createdAt,
+  );
+  const updated = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+  return { user: updated!, balance: next, ledgerId };
+}
+
 async function grantPremium(opts: {
   db: MatchDb;
   userId: string;
@@ -205,6 +254,135 @@ async function grantPremium(opts: {
 
   const updated = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
   return { alreadyProcessed: false as const, user: updated! };
+}
+
+async function grantPointsPurchase(opts: {
+  db: MatchDb;
+  userId: string;
+  provider: string;
+  providerRef: string;
+  product: string;
+  amountJpy: number;
+  points: number;
+  stripeCustomerId?: string | null;
+}) {
+  const {
+    db,
+    userId,
+    provider,
+    providerRef,
+    product,
+    amountJpy,
+    points,
+    stripeCustomerId,
+  } = opts;
+  const existing = await db.first<{ id: string }>(
+    "SELECT id FROM purchases WHERE provider_ref = ?",
+    providerRef,
+  );
+  if (existing) {
+    const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+    return { alreadyProcessed: true as const, user: user! };
+  }
+
+  const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+  if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+
+  const createdAt = new Date().toISOString();
+  const purchaseId = uuidv4();
+  await db.run(
+    `INSERT INTO purchases (id, user_id, provider, provider_ref, product, amount_jpy, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)`,
+    purchaseId,
+    userId,
+    provider,
+    providerRef,
+    product,
+    amountJpy,
+    createdAt,
+  );
+
+  if (stripeCustomerId) {
+    await db.run(
+      "UPDATE users SET stripe_customer_id = ? WHERE id = ?",
+      stripeCustomerId,
+      userId,
+    );
+  }
+
+  const credited = await applyPointDelta({
+    db,
+    userId,
+    delta: points,
+    reason: `purchase_${product}`,
+    refId: purchaseId,
+  });
+  return { alreadyProcessed: false as const, user: credited.user };
+}
+
+async function fulfillCheckoutPurchase(opts: {
+  db: MatchDb;
+  userId: string;
+  provider: string;
+  providerRef: string;
+  product: string;
+  stripeCustomerId?: string | null;
+}) {
+  const { db, userId, provider, providerRef, product, stripeCustomerId } = opts;
+  if (product === "premium_30d") {
+    return grantPremium({
+      db,
+      userId,
+      provider,
+      providerRef,
+      amountJpy: PREMIUM_PRICE_JPY,
+      stripeCustomerId,
+    });
+  }
+  const pack = getPointPack(product);
+  if (!pack) {
+    throw new HTTPException(400, { message: `未知の商品です: ${product}` });
+  }
+  return grantPointsPurchase({
+    db,
+    userId,
+    provider,
+    providerRef,
+    product: pack.id,
+    amountJpy: pack.priceJpy,
+    points: pack.points,
+    stripeCustomerId,
+  });
+}
+
+async function recentPointLedger(db: MatchDb, userId: string, limit = 30) {
+  const rows = await db.all<PointLedgerRow>(
+    `SELECT * FROM point_ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
+    userId,
+    limit,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    delta: r.delta,
+    balanceAfter: r.balance_after,
+    reason: r.reason,
+    refId: r.ref_id,
+    createdAt: r.created_at,
+  }));
+}
+
+async function countFreeCallsUsedToday(db: MatchDb, userId: string, now = new Date()) {
+  const day = utcDayKey(now);
+  const start = `${day}T00:00:00.000Z`;
+  const end = `${day}T23:59:59.999Z`;
+  const row = await db.first<{ cnt: number }>(
+    `SELECT COUNT(*) as cnt FROM point_ledger
+     WHERE user_id = ? AND reason = 'call_free' AND created_at >= ? AND created_at <= ?`,
+    userId,
+    start,
+    end,
+  );
+  return Number(row?.cnt ?? 0);
 }
 
 export function createApp(options: CreateAppOptions) {
@@ -341,6 +519,10 @@ export function createApp(options: CreateAppOptions) {
     await authenticate(c);
     await next();
   });
+  app.use("/billing/history", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
   app.use("/ratings/*", async (c, next) => {
     await authenticate(c);
     await next();
@@ -471,18 +653,36 @@ export function createApp(options: CreateAppOptions) {
     const host = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", hostId);
     if (!host) throw new HTTPException(401, { message: "ユーザーが見つかりません" });
     const premium = isPremiumActive(host.premium_until);
-    const maxOpen = maxOpenListingsFor(premium);
+    const freeQuota = maxOpenListingsFor(premium);
     const openRow = await db.first<{ cnt: number }>(
       `SELECT COUNT(*) as cnt FROM listings WHERE host_id = ? AND status = 'open'`,
       hostId,
     );
     const openCount = Number(openRow?.cnt ?? 0);
-    if (openCount >= maxOpen) {
+    if (openCount >= HARD_MAX_OPEN_LISTINGS) {
       throw new HTTPException(403, {
-        message: premium
-          ? `プレミアムでも同時に公開できる募集は${maxOpen}件までです`
-          : `無料プランの同時募集は${maxOpen}件までです。プレミアムで最大${maxOpenListingsFor(true)}件まで作成できます`,
+        message: `同時に公開できる募集は最大${HARD_MAX_OPEN_LISTINGS}件までです`,
       });
+    }
+
+    let pointsSpent = 0;
+    if (openCount >= freeQuota) {
+      const balance = pointsBalanceOf(host);
+      if (balance < POINTS_COST_EXTRA_LISTING) {
+        throw new HTTPException(402, {
+          message: premium
+            ? `同時募集の無料枠（${freeQuota}件）を使い切りました。追加は${POINTS_COST_EXTRA_LISTING}pt必要です（残高${balance}）`
+            : `無料の同時募集は${freeQuota}件までです。追加は${POINTS_COST_EXTRA_LISTING}pt、またはプレミアムで枠拡大（残高${balance}）`,
+        });
+      }
+      await applyPointDelta({
+        db,
+        userId: hostId,
+        delta: -POINTS_COST_EXTRA_LISTING,
+        reason: "spend_extra_listing",
+        refId: id,
+      });
+      pointsSpent = POINTS_COST_EXTRA_LISTING;
     }
 
     await db.run(
@@ -506,7 +706,18 @@ export function createApp(options: CreateAppOptions) {
     );
 
     const detail = await listingDetail(db, id);
-    return c.json({ listing: detail }, 201);
+    const updatedHost = await db.first<UserRow>(
+      "SELECT * FROM users WHERE id = ?",
+      hostId,
+    );
+    return c.json(
+      {
+        listing: detail,
+        pointsSpent,
+        pointsBalance: pointsBalanceOf(updatedHost ?? host),
+      },
+      201,
+    );
   });
 
   app.get("/listings/:id", async (c) => {
@@ -601,6 +812,19 @@ export function createApp(options: CreateAppOptions) {
       });
     }
 
+    const freeUsed = await countFreeCallsUsedToday(db, userId);
+    const usedFreeQuota = freeUsed < FREE_CALLS_PER_DAY;
+    let pointsSpent = 0;
+    if (!usedFreeQuota) {
+      const balance = pointsBalanceOf(user);
+      if (balance < POINTS_COST_CALL) {
+        throw new HTTPException(402, {
+          message: `本日の無料通話（${FREE_CALLS_PER_DAY}回）を使い切りました。追加は${POINTS_COST_CALL}pt必要です（残高${balance}）`,
+        });
+      }
+      pointsSpent = POINTS_COST_CALL;
+    }
+
     const roomName = listingRoomName(listingId);
     const token = await createLiveKitAccessToken({
       config: livekit,
@@ -609,11 +833,40 @@ export function createApp(options: CreateAppOptions) {
       roomName,
     });
 
+    if (usedFreeQuota) {
+      await applyPointDelta({
+        db,
+        userId,
+        delta: 0,
+        reason: "call_free",
+        refId: listingId,
+      });
+    } else {
+      await applyPointDelta({
+        db,
+        userId,
+        delta: -POINTS_COST_CALL,
+        reason: "spend_call",
+        refId: listingId,
+      });
+    }
+
+    const updatedUser = await db.first<UserRow>(
+      "SELECT * FROM users WHERE id = ?",
+      userId,
+    );
     return c.json({
       url: livekit.url,
       token,
       roomName,
       identity: userId,
+      pointsSpent,
+      usedFreeQuota,
+      pointsBalance: pointsBalanceOf(updatedUser ?? user),
+      freeCallsRemainingToday: Math.max(
+        0,
+        FREE_CALLS_PER_DAY - freeUsed - (usedFreeQuota ? 1 : 0),
+      ),
     });
   });
 
@@ -815,18 +1068,37 @@ export function createApp(options: CreateAppOptions) {
   });
 
   app.get("/billing/status", async (c) => {
-    const user = await c.get("db").first<UserRow>(
+    const db = c.get("db");
+    const userId = c.get("userId");
+    const user = await db.first<UserRow>(
       "SELECT * FROM users WHERE id = ?",
-      c.get("userId"),
+      userId,
     );
     if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
     const billing = c.get("billing");
+    const history = await recentPointLedger(db, userId, 20);
+    const freeCallsUsedToday = await countFreeCallsUsedToday(db, userId);
     return c.json({
       ...billingStatusPayload(user),
+      history,
+      freeCallsUsedToday,
+      freeCallsRemainingToday: Math.max(0, FREE_CALLS_PER_DAY - freeCallsUsedToday),
       stripeEnabled: !!billing.stripeSecretKey,
       mockPurchaseAvailable: billing.allowMockPurchase,
       note:
-        "Web 決済（Stripe Checkout）。App Store / Google Play のアプリ内課金は後続。",
+        "ポイント制が主課金。Stripe Checkout（Web）。プレミアムは共存。アプリ内課金は後続。",
+    });
+  });
+
+  app.get("/billing/history", async (c) => {
+    const db = c.get("db");
+    const userId = c.get("userId");
+    const history = await recentPointLedger(db, userId, 50);
+    const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+    if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+    return c.json({
+      pointsBalance: pointsBalanceOf(user),
+      history,
     });
   });
 
@@ -838,6 +1110,16 @@ export function createApp(options: CreateAppOptions) {
       c.get("userId"),
     );
     if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+
+    const body = await c.req.json<{ product?: string }>().catch(() => ({} as { product?: string }));
+    const productRaw = (body.product ?? "points_100").trim();
+    if (!isBillableProductId(productRaw)) {
+      throw new HTTPException(400, {
+        message:
+          "product は points_100 / points_500 / points_1000 / premium_30d のいずれかです",
+      });
+    }
+    const product: BillableProductId = productRaw;
 
     if (!billing.stripeSecretKey) {
       if (billing.allowMockPurchase) {
@@ -860,11 +1142,13 @@ export function createApp(options: CreateAppOptions) {
         config: billing,
         userId: user.id,
         email: user.email,
+        product,
       });
       return c.json({
         url: session.url,
         sessionId: session.id,
         provider: "stripe",
+        product,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Checkout 作成に失敗しました";
@@ -880,22 +1164,33 @@ export function createApp(options: CreateAppOptions) {
         message: "モック購入は無効です（本番では Stripe Checkout を使ってください）",
       });
     }
+    const body = await c.req.json<{ product?: string }>().catch(() => ({} as { product?: string }));
+    const productRaw = (body.product ?? "points_100").trim();
+    if (!isBillableProductId(productRaw)) {
+      throw new HTTPException(400, {
+        message:
+          "product は points_100 / points_500 / points_1000 / premium_30d のいずれかです",
+      });
+    }
     const userId = c.get("userId");
-    const result = await grantPremium({
+    const result = await fulfillCheckoutPurchase({
       db: c.get("db"),
       userId,
       provider: "mock",
-      providerRef: `mock_${userId}_${Date.now()}`,
-      amountJpy: PREMIUM_PRICE_JPY,
+      providerRef: `mock_${productRaw}_${userId}_${Date.now()}`,
+      product: productRaw,
     });
+    const history = await recentPointLedger(c.get("db"), userId, 20);
     return c.json({
       user: publicUser(result.user),
       ...billingStatusPayload(result.user),
+      history,
       provider: "mock",
+      product: productRaw,
     });
   });
 
-  /** After Stripe redirect: confirm session and grant premium (also covered by webhook). */
+  /** After Stripe redirect: confirm session and grant product (also covered by webhook). */
   app.post("/billing/confirm", async (c) => {
     const billing = c.get("billing");
     if (!billing.stripeSecretKey) {
@@ -926,19 +1221,23 @@ export function createApp(options: CreateAppOptions) {
     if (userId !== c.get("userId")) {
       throw new HTTPException(403, { message: "この決済は別ユーザーのものです" });
     }
-    const result = await grantPremium({
+    const product = session.metadata.product || "premium_30d";
+    const result = await fulfillCheckoutPurchase({
       db: c.get("db"),
       userId,
       provider: "stripe",
       providerRef: session.id,
-      amountJpy: PREMIUM_PRICE_JPY,
+      product,
       stripeCustomerId: session.customer,
     });
+    const history = await recentPointLedger(c.get("db"), userId, 20);
     return c.json({
       user: publicUser(result.user),
       ...billingStatusPayload(result.user),
+      history,
       alreadyProcessed: result.alreadyProcessed,
       provider: "stripe",
+      product,
     });
   });
 
@@ -977,6 +1276,7 @@ export function createApp(options: CreateAppOptions) {
       const userId =
         session?.client_reference_id || session?.metadata?.userId || "";
       const sessionId = session?.id || "";
+      const product = session?.metadata?.product || "premium_30d";
       if (
         userId &&
         sessionId &&
@@ -984,14 +1284,18 @@ export function createApp(options: CreateAppOptions) {
           session?.payment_status === "no_payment_required" ||
           !session?.payment_status)
       ) {
-        await grantPremium({
-          db: c.get("db"),
-          userId,
-          provider: "stripe",
-          providerRef: sessionId,
-          amountJpy: PREMIUM_PRICE_JPY,
-          stripeCustomerId: session?.customer ?? null,
-        });
+        try {
+          await fulfillCheckoutPurchase({
+            db: c.get("db"),
+            userId,
+            provider: "stripe",
+            providerRef: sessionId,
+            product,
+            stripeCustomerId: session?.customer ?? null,
+          });
+        } catch (e) {
+          console.error("webhook fulfill failed", e);
+        }
       }
     }
 
@@ -1000,7 +1304,7 @@ export function createApp(options: CreateAppOptions) {
 
   app.get("/billing/success", (c) => {
     const sessionId = c.req.query("session_id") || "";
-    const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>購入完了</title></head><body style="font-family:system-ui;padding:2rem;max-width:32rem;margin:auto"><h1>プレミアム購入を受け付けました</h1><p>アプリに戻ってプロフィールを更新してください。</p><p style="color:#666;font-size:0.9rem">session: ${sessionId.replace(/[<>&"]/g, "")}</p></body></html>`;
+    const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>購入完了</title></head><body style="font-family:system-ui;padding:2rem;max-width:32rem;margin:auto"><h1>購入を受け付けました</h1><p>アプリに戻ってプロフィールを更新してください。ポイント残高が反映されます。</p><p style="color:#666;font-size:0.9rem">session: ${sessionId.replace(/[<>&"]/g, "")}</p></body></html>`;
     return c.html(html);
   });
 
