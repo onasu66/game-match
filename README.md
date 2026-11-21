@@ -20,7 +20,7 @@ game-match/
 
 初期タイトル固定: Apex Legends / League of Legends / Overwatch / ストリートファイター / Valorant / Minecraft
 
-非スコープ: 評価・通報、自動マッチ
+非スコープ: 評価・通報、自動マッチ、ネイティブアプリ内課金（IAP）
 
 ## 通話の流れ
 
@@ -33,11 +33,32 @@ game-match/
 ルーム名: `listing-<listingId>`  
 LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 
+## 課金（MVP）
+
+**方式: Stripe Checkout（Web 決済）。App Store / Google Play のアプリ内課金は後続。**
+
+- 商品: プレミアム 30 日（¥480、Price ID 未設定時は API 側 `price_data`）
+- 無料との差分: 同時公開募集数（無料 1 / プレミアム 5）+ プレミアムバッジ
+- UI は専用画面を増やず、既存プロフィールに配置
+- Stripe 未設定時は `POST /billing/mock-purchase` が有効
+
+必要な Worker シークレット名（値はリポジトリ・チャットに出さない）:
+
+| 名前 | 必須 | 説明 |
+|------|------|------|
+| `JWT_SECRET` | 済 | アプリ JWT |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | 通話 | LiveKit |
+| `STRIPE_SECRET_KEY` | 本番課金 | Stripe シークレット |
+| `STRIPE_WEBHOOK_SECRET` | 本番課金 | Webhook 署名検証 |
+| `STRIPE_PRICE_ID` | 任意 | 固定 Price。未設定時は inline price_data |
+| `ALLOW_MOCK_PURCHASE` | 任意 | 本番は `0` 推奨 |
+
 ## 本番デプロイ（Cloudflare）
 
 - Worker: https://game-match-api.0v09979.workers.dev
 - 詳細手順: `api/DEPLOY.md`
 - リポジトリ: https://github.com/onasu66/game-match
+- 課金スキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/001_billing.sql`
 
 必要な Worker シークレット:
 
@@ -108,7 +129,12 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 | PATCH | `/profile` | 表示名・好きなタイトル |
 | GET | `/games` | 固定 6 タイトル |
 | GET | `/listings` | 一覧（`?game=`） |
-| POST | `/listings` | 作成 |
+| POST | `/listings` | 作成（無料は同時1件まで） |
 | GET | `/listings/:id` | 詳細＋参加者 |
 | POST | `/listings/:id/join` | 参加 |
 | POST | `/listings/:id/call-token` | LiveKit `url` + `token`（参加者のみ） |
+| GET | `/billing/status` | プラン状態 |
+| POST | `/billing/checkout` | Stripe Checkout URL |
+| POST | `/billing/confirm` | Checkout 完了後の付与確認 |
+| POST | `/billing/mock-purchase` | 開発用モック購入 |
+| POST | `/billing/webhook` | Stripe Webhook |

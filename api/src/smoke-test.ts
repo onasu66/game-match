@@ -122,7 +122,6 @@ async function main() {
     assert(typeof call.json.url === "string" && call.json.url.startsWith("wss://"), "missing LiveKit url");
     assert(typeof call.json.token === "string" && call.json.token.length > 20, "missing LiveKit token");
     assert(call.json.roomName === `listing-${listingId}`, "unexpected room name");
-    // Decode JWT payload (no verify) to confirm grants
     const payloadB64 = (call.json.token as string).split(".")[1];
     const payload = JSON.parse(
       Buffer.from(payloadB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
@@ -130,6 +129,47 @@ async function main() {
     assert(payload.video?.roomJoin === true, "token missing roomJoin");
     assert(payload.video?.room === `listing-${listingId}`, "token room mismatch");
     assert(typeof payload.sub === "string" && payload.sub.length > 0, "token sub missing");
+  }
+
+  // Free tier: second open listing as host should be blocked
+  const second = await req("/listings", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${hostToken}` },
+    body: JSON.stringify({
+      game: "Minecraft",
+      slots: 3,
+      description: "should fail for free",
+    }),
+  });
+  assert(second.status === 403, `expected free listing limit 403, got ${second.status}`);
+
+  const billing = await req("/billing/status", {
+    headers: { Authorization: `Bearer ${hostToken}` },
+  });
+  assert(billing.status === 200, `billing status failed: ${JSON.stringify(billing.json)}`);
+  assert(billing.json.isPremium === false, "expected free plan");
+  assert(billing.json.maxOpenListings === 1, "expected free maxOpenListings=1");
+
+  if (billing.json.mockPurchaseAvailable) {
+    const mock = await req("/billing/mock-purchase", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${hostToken}` },
+      body: "{}",
+    });
+    assert(mock.status === 200, `mock purchase failed: ${JSON.stringify(mock.json)}`);
+    assert(mock.json.isPremium === true, "expected premium after mock");
+    assert(mock.json.user?.isPremium === true, "user.isPremium should be true");
+
+    const third = await req("/listings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${hostToken}` },
+      body: JSON.stringify({
+        game: "Minecraft",
+        slots: 3,
+        description: "premium second listing",
+      }),
+    });
+    assert(third.status === 201, `premium second listing failed: ${JSON.stringify(third.json)}`);
   }
 
   console.log("SMOKE OK");
@@ -142,6 +182,10 @@ async function main() {
         members: detail.json.listing.members.map((m: { displayName: string }) => m.displayName),
         callTokenStatus: call.status,
         roomName: call.json.roomName ?? null,
+        billing: {
+          isPremium: billing.json.isPremium,
+          mockPurchaseAvailable: billing.json.mockPurchaseAvailable,
+        },
       },
       null,
       2,

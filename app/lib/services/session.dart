@@ -96,6 +96,16 @@ class SessionController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshUser() async {
+    user = await api.me();
+    notifyListeners();
+  }
+
+  Future<void> applyUser(User next) async {
+    user = next;
+    notifyListeners();
+  }
+
   Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');

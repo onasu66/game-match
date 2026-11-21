@@ -12,6 +12,17 @@ import {
   verifyToken,
 } from "./auth.js";
 import {
+  billingStatusPayload,
+  createStripeCheckoutSession,
+  extendPremiumUntil,
+  isPremiumActive,
+  maxOpenListingsFor,
+  PREMIUM_PRICE_JPY,
+  retrieveStripeCheckoutSession,
+  verifyStripeWebhookSignature,
+  type BillingConfig,
+} from "./billing.js";
+import {
   createLiveKitAccessToken,
   listingRoomName,
   type LiveKitConfig,
@@ -24,6 +35,7 @@ export type AppEnv = {
     db: MatchDb;
     jwtSecret: string;
     livekit: LiveKitConfig | null;
+    billing: BillingConfig;
   };
 };
 
@@ -31,6 +43,7 @@ export type CreateAppOptions = {
   getDb: (c: { env?: unknown }) => MatchDb;
   getJwtSecret: (c: { env?: unknown }) => string;
   getLiveKitConfig: (c: { env?: unknown }) => LiveKitConfig | null;
+  getBillingConfig: (c: { env?: unknown }) => BillingConfig;
 };
 
 function parseBearer(header: string | undefined): string | null {
@@ -52,9 +65,13 @@ async function listingDetail(db: MatchDb, listingId: string) {
     listing.host_id,
   );
   const members = await db.all<
-    MembershipRow & { display_name: string; email: string }
+    MembershipRow & {
+      display_name: string;
+      email: string;
+      premium_until: string | null;
+    }
   >(
-    `SELECT m.listing_id, m.user_id, m.joined_at, u.display_name, u.email
+    `SELECT m.listing_id, m.user_id, m.joined_at, u.display_name, u.email, u.premium_until
      FROM memberships m
      JOIN users u ON u.id = m.user_id
      WHERE m.listing_id = ?
@@ -67,6 +84,7 @@ async function listingDetail(db: MatchDb, listingId: string) {
     id: listing.id,
     hostId: listing.host_id,
     hostDisplayName: host?.display_name ?? "unknown",
+    hostIsPremium: isPremiumActive(host?.premium_until),
     game: listing.game,
     rankNote: listing.rank_note,
     slots: listing.slots,
@@ -80,8 +98,64 @@ async function listingDetail(db: MatchDb, listingId: string) {
       displayName: m.display_name,
       email: m.email,
       joinedAt: m.joined_at,
+      isPremium: isPremiumActive(m.premium_until),
     })),
   };
+}
+
+async function grantPremium(opts: {
+  db: MatchDb;
+  userId: string;
+  provider: string;
+  providerRef: string;
+  amountJpy: number | null;
+  stripeCustomerId?: string | null;
+}) {
+  const { db, userId, provider, providerRef, amountJpy, stripeCustomerId } = opts;
+  const existing = await db.first<{ id: string }>(
+    "SELECT id FROM purchases WHERE provider_ref = ?",
+    providerRef,
+  );
+  if (existing) {
+    const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+    return { alreadyProcessed: true as const, user: user! };
+  }
+
+  const user = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+  if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+
+  const premiumUntil = extendPremiumUntil(user.premium_until);
+  const createdAt = new Date().toISOString();
+  const purchaseId = uuidv4();
+
+  await db.run(
+    `INSERT INTO purchases (id, user_id, provider, provider_ref, product, amount_jpy, status, created_at)
+     VALUES (?, ?, ?, ?, 'premium_30d', ?, 'completed', ?)`,
+    purchaseId,
+    userId,
+    provider,
+    providerRef,
+    amountJpy,
+    createdAt,
+  );
+
+  if (stripeCustomerId) {
+    await db.run(
+      "UPDATE users SET premium_until = ?, stripe_customer_id = ? WHERE id = ?",
+      premiumUntil,
+      stripeCustomerId,
+      userId,
+    );
+  } else {
+    await db.run(
+      "UPDATE users SET premium_until = ? WHERE id = ?",
+      premiumUntil,
+      userId,
+    );
+  }
+
+  const updated = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", userId);
+  return { alreadyProcessed: false as const, user: updated! };
 }
 
 export function createApp(options: CreateAppOptions) {
@@ -100,6 +174,7 @@ export function createApp(options: CreateAppOptions) {
     c.set("db", options.getDb(c as never));
     c.set("jwtSecret", options.getJwtSecret(c as never));
     c.set("livekit", options.getLiveKitConfig(c as never));
+    c.set("billing", options.getBillingConfig(c as never));
     await next();
   });
 
@@ -201,10 +276,26 @@ export function createApp(options: CreateAppOptions) {
     await authenticate(c);
     await next();
   });
+  app.use("/billing/status", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
+  app.use("/billing/checkout", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
+  app.use("/billing/mock-purchase", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
+  app.use("/billing/confirm", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
 
   async function authenticate(c: {
     req: { header: (name: string) => string | undefined };
-    get: (key: "db" | "jwtSecret" | "userId" | "livekit") => unknown;
+    get: (key: "db" | "jwtSecret" | "userId" | "livekit" | "billing") => unknown;
     set: (key: "userId", value: string) => void;
   }) {
     const token = parseBearer(c.req.header("Authorization"));
@@ -320,6 +411,22 @@ export function createApp(options: CreateAppOptions) {
     const createdAt = new Date().toISOString();
     const hostId = c.get("userId");
     const db = c.get("db");
+    const host = await db.first<UserRow>("SELECT * FROM users WHERE id = ?", hostId);
+    if (!host) throw new HTTPException(401, { message: "ユーザーが見つかりません" });
+    const premium = isPremiumActive(host.premium_until);
+    const maxOpen = maxOpenListingsFor(premium);
+    const openRow = await db.first<{ cnt: number }>(
+      `SELECT COUNT(*) as cnt FROM listings WHERE host_id = ? AND status = 'open'`,
+      hostId,
+    );
+    const openCount = Number(openRow?.cnt ?? 0);
+    if (openCount >= maxOpen) {
+      throw new HTTPException(403, {
+        message: premium
+          ? `プレミアムでも同時に公開できる募集は${maxOpen}件までです`
+          : `無料プランの同時募集は${maxOpen}件までです。プレミアムで最大${maxOpenListingsFor(true)}件まで作成できます`,
+      });
+    }
 
     await db.run(
       `INSERT INTO listings
@@ -394,14 +501,6 @@ export function createApp(options: CreateAppOptions) {
    * Mic is optional on the client; this token still allows publish so unmute works later.
    */
   app.post("/listings/:id/call-token", async (c) => {
-    const livekit = c.get("livekit");
-    if (!livekit) {
-      throw new HTTPException(503, {
-        message:
-          "LiveKit が未設定です（LIVEKIT_API_KEY / LIVEKIT_API_SECRET が必要）",
-      });
-    }
-
     const db = c.get("db");
     const listingId = c.req.param("id");
     const userId = c.get("userId");
@@ -434,6 +533,14 @@ export function createApp(options: CreateAppOptions) {
       });
     }
 
+    const livekit = c.get("livekit");
+    if (!livekit) {
+      throw new HTTPException(503, {
+        message:
+          "LiveKit が未設定です（LIVEKIT_API_KEY / LIVEKIT_API_SECRET が必要）",
+      });
+    }
+
     const roomName = listingRoomName(listingId);
     const token = await createLiveKitAccessToken({
       config: livekit,
@@ -448,6 +555,202 @@ export function createApp(options: CreateAppOptions) {
       roomName,
       identity: userId,
     });
+  });
+
+  app.get("/billing/status", async (c) => {
+    const user = await c.get("db").first<UserRow>(
+      "SELECT * FROM users WHERE id = ?",
+      c.get("userId"),
+    );
+    if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+    const billing = c.get("billing");
+    return c.json({
+      ...billingStatusPayload(user),
+      stripeEnabled: !!billing.stripeSecretKey,
+      mockPurchaseAvailable: billing.allowMockPurchase,
+      note:
+        "Web 決済（Stripe Checkout）。App Store / Google Play のアプリ内課金は後続。",
+    });
+  });
+
+  app.post("/billing/checkout", async (c) => {
+    const billing = c.get("billing");
+    const db = c.get("db");
+    const user = await db.first<UserRow>(
+      "SELECT * FROM users WHERE id = ?",
+      c.get("userId"),
+    );
+    if (!user) throw new HTTPException(404, { message: "ユーザーが見つかりません" });
+
+    if (!billing.stripeSecretKey) {
+      if (billing.allowMockPurchase) {
+        return c.json(
+          {
+            error:
+              "Stripe 未設定のため Checkout は使えません。モック購入（/billing/mock-purchase）を利用してください",
+            mockPurchaseAvailable: true,
+          },
+          503,
+        );
+      }
+      throw new HTTPException(503, {
+        message: "Stripe が未設定です（STRIPE_SECRET_KEY が必要）",
+      });
+    }
+
+    try {
+      const session = await createStripeCheckoutSession({
+        config: billing,
+        userId: user.id,
+        email: user.email,
+      });
+      return c.json({
+        url: session.url,
+        sessionId: session.id,
+        provider: "stripe",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Checkout 作成に失敗しました";
+      throw new HTTPException(502, { message: msg });
+    }
+  });
+
+  /** Local / demo path when Stripe secrets are not configured. */
+  app.post("/billing/mock-purchase", async (c) => {
+    const billing = c.get("billing");
+    if (!billing.allowMockPurchase) {
+      throw new HTTPException(403, {
+        message: "モック購入は無効です（本番では Stripe Checkout を使ってください）",
+      });
+    }
+    const userId = c.get("userId");
+    const result = await grantPremium({
+      db: c.get("db"),
+      userId,
+      provider: "mock",
+      providerRef: `mock_${userId}_${Date.now()}`,
+      amountJpy: PREMIUM_PRICE_JPY,
+    });
+    return c.json({
+      user: publicUser(result.user),
+      ...billingStatusPayload(result.user),
+      provider: "mock",
+    });
+  });
+
+  /** After Stripe redirect: confirm session and grant premium (also covered by webhook). */
+  app.post("/billing/confirm", async (c) => {
+    const billing = c.get("billing");
+    if (!billing.stripeSecretKey) {
+      throw new HTTPException(503, { message: "Stripe が未設定です" });
+    }
+    const body = await c.req.json<{ sessionId?: string }>();
+    const sessionId = body.sessionId?.trim() ?? "";
+    if (!sessionId) {
+      throw new HTTPException(400, { message: "sessionId が必要です" });
+    }
+    let session;
+    try {
+      session = await retrieveStripeCheckoutSession(
+        billing.stripeSecretKey,
+        sessionId,
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "session 取得に失敗";
+      throw new HTTPException(502, { message: msg });
+    }
+    if (session.payment_status !== "paid") {
+      throw new HTTPException(402, { message: "支払いが完了していません" });
+    }
+    const userId =
+      session.client_reference_id ||
+      session.metadata.userId ||
+      c.get("userId");
+    if (userId !== c.get("userId")) {
+      throw new HTTPException(403, { message: "この決済は別ユーザーのものです" });
+    }
+    const result = await grantPremium({
+      db: c.get("db"),
+      userId,
+      provider: "stripe",
+      providerRef: session.id,
+      amountJpy: PREMIUM_PRICE_JPY,
+      stripeCustomerId: session.customer,
+    });
+    return c.json({
+      user: publicUser(result.user),
+      ...billingStatusPayload(result.user),
+      alreadyProcessed: result.alreadyProcessed,
+      provider: "stripe",
+    });
+  });
+
+  app.post("/billing/webhook", async (c) => {
+    const billing = c.get("billing");
+    if (!billing.stripeSecretKey || !billing.stripeWebhookSecret) {
+      throw new HTTPException(503, {
+        message: "Stripe webhook が未設定です",
+      });
+    }
+    const rawBody = await c.req.text();
+    const ok = await verifyStripeWebhookSignature(
+      rawBody,
+      c.req.header("Stripe-Signature"),
+      billing.stripeWebhookSecret,
+    );
+    if (!ok) {
+      throw new HTTPException(400, { message: "署名が無効です" });
+    }
+
+    const event = JSON.parse(rawBody) as {
+      type?: string;
+      data?: {
+        object?: {
+          id?: string;
+          payment_status?: string;
+          client_reference_id?: string | null;
+          customer?: string | null;
+          metadata?: Record<string, string>;
+        };
+      };
+    };
+
+    if (event.type === "checkout.session.completed") {
+      const session = event.data?.object;
+      const userId =
+        session?.client_reference_id || session?.metadata?.userId || "";
+      const sessionId = session?.id || "";
+      if (
+        userId &&
+        sessionId &&
+        (session?.payment_status === "paid" ||
+          session?.payment_status === "no_payment_required" ||
+          !session?.payment_status)
+      ) {
+        await grantPremium({
+          db: c.get("db"),
+          userId,
+          provider: "stripe",
+          providerRef: sessionId,
+          amountJpy: PREMIUM_PRICE_JPY,
+          stripeCustomerId: session?.customer ?? null,
+        });
+      }
+    }
+
+    return c.json({ received: true });
+  });
+
+  app.get("/billing/success", (c) => {
+    const sessionId = c.req.query("session_id") || "";
+    const html = `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>購入完了</title></head><body style="font-family:system-ui;padding:2rem;max-width:32rem;margin:auto"><h1>プレミアム購入を受け付けました</h1><p>アプリに戻ってプロフィールを更新してください。</p><p style="color:#666;font-size:0.9rem">session: ${sessionId.replace(/[<>&"]/g, "")}</p></body></html>`;
+    return c.html(html);
+  });
+
+  app.get("/billing/cancel", (c) => {
+    return c.html(
+      `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"/><title>キャンセル</title></head><body style="font-family:system-ui;padding:2rem"><h1>購入はキャンセルされました</h1><p>アプリに戻って再度お試しください。</p></body></html>`,
+    );
   });
 
   app.onError((err, c) => {
