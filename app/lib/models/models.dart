@@ -7,6 +7,10 @@ class User {
     required this.favoriteGames,
     required this.createdAt,
     required this.ageVerified,
+    this.isPremium = false,
+    this.premiumUntil,
+    this.plan = 'free',
+    this.maxOpenListings = 1,
   });
 
   final String id;
@@ -16,6 +20,10 @@ class User {
   final List<String> favoriteGames;
   final String createdAt;
   final bool ageVerified;
+  final bool isPremium;
+  final String? premiumUntil;
+  final String plan;
+  final int maxOpenListings;
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
@@ -28,6 +36,57 @@ class User {
           .toList(),
       createdAt: json['createdAt'] as String,
       ageVerified: json['ageVerified'] as bool? ?? true,
+      isPremium: json['isPremium'] as bool? ?? false,
+      premiumUntil: json['premiumUntil'] as String?,
+      plan: json['plan'] as String? ?? 'free',
+      maxOpenListings: json['maxOpenListings'] as int? ?? 1,
+    );
+  }
+}
+
+class BillingStatus {
+  BillingStatus({
+    required this.isPremium,
+    required this.plan,
+    required this.maxOpenListings,
+    required this.freeMaxOpenListings,
+    required this.premiumMaxOpenListings,
+    required this.premiumDurationDays,
+    required this.premiumPriceJpy,
+    required this.productName,
+    required this.stripeEnabled,
+    required this.mockPurchaseAvailable,
+    this.premiumUntil,
+    this.note,
+  });
+
+  final bool isPremium;
+  final String? premiumUntil;
+  final String plan;
+  final int maxOpenListings;
+  final int freeMaxOpenListings;
+  final int premiumMaxOpenListings;
+  final int premiumDurationDays;
+  final int premiumPriceJpy;
+  final String productName;
+  final bool stripeEnabled;
+  final bool mockPurchaseAvailable;
+  final String? note;
+
+  factory BillingStatus.fromJson(Map<String, dynamic> json) {
+    return BillingStatus(
+      isPremium: json['isPremium'] as bool? ?? false,
+      premiumUntil: json['premiumUntil'] as String?,
+      plan: json['plan'] as String? ?? 'free',
+      maxOpenListings: json['maxOpenListings'] as int? ?? 1,
+      freeMaxOpenListings: json['freeMaxOpenListings'] as int? ?? 1,
+      premiumMaxOpenListings: json['premiumMaxOpenListings'] as int? ?? 5,
+      premiumDurationDays: json['premiumDurationDays'] as int? ?? 30,
+      premiumPriceJpy: json['premiumPriceJpy'] as int? ?? 480,
+      productName: json['productName'] as String? ?? 'プレミアム',
+      stripeEnabled: json['stripeEnabled'] as bool? ?? false,
+      mockPurchaseAvailable: json['mockPurchaseAvailable'] as bool? ?? false,
+      note: json['note'] as String?,
     );
   }
 }
@@ -38,12 +97,14 @@ class Member {
     required this.displayName,
     required this.email,
     required this.joinedAt,
+    this.isPremium = false,
   });
 
   final String userId;
   final String displayName;
   final String email;
   final String joinedAt;
+  final bool isPremium;
 
   factory Member.fromJson(Map<String, dynamic> json) {
     return Member(
@@ -51,6 +112,7 @@ class Member {
       displayName: json['displayName'] as String,
       email: json['email'] as String,
       joinedAt: json['joinedAt'] as String,
+      isPremium: json['isPremium'] as bool? ?? false,
     );
   }
 }
@@ -69,11 +131,13 @@ class Listing {
     required this.createdAt,
     required this.memberCount,
     required this.members,
+    this.hostIsPremium = false,
   });
 
   final String id;
   final String hostId;
   final String hostDisplayName;
+  final bool hostIsPremium;
   final String game;
   final String rankNote;
   final int slots;
@@ -89,6 +153,7 @@ class Listing {
       id: json['id'] as String,
       hostId: json['hostId'] as String,
       hostDisplayName: json['hostDisplayName'] as String? ?? '',
+      hostIsPremium: json['hostIsPremium'] as bool? ?? false,
       game: json['game'] as String,
       rankNote: json['rankNote'] as String? ?? '',
       slots: json['slots'] as int,

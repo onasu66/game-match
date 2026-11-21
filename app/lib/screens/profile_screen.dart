@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/models.dart';
 import '../services/session.dart';
+import 'premium_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -66,7 +67,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          Text('メール: ${user.email}'),
+          Row(
+            children: [
+              Expanded(child: Text('メール: ${user.email}')),
+              if (user.isPremium)
+                Chip(
+                  avatar: Icon(
+                    Icons.workspace_premium,
+                    size: 18,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  label: const Text('Premium'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            user.isPremium
+                ? 'プラン: プレミアム（同時募集 ${user.maxOpenListings} 件）'
+                : 'プラン: 無料（同時募集 ${user.maxOpenListings} 件）',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          if (user.isPremium && user.premiumUntil != null)
+            Text(
+              '有効期限: ${user.premiumUntil}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PremiumScreen()),
+              );
+              if (mounted) setState(() {});
+            },
+            icon: const Icon(Icons.workspace_premium_outlined),
+            label: Text(user.isPremium ? 'プレミアムを管理' : 'プレミアムにアップグレード'),
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: _name,

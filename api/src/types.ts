@@ -6,6 +6,19 @@ export type UserRow = {
   birth_date: string;
   favorite_games: string;
   created_at: string;
+  premium_until?: string | null;
+  stripe_customer_id?: string | null;
+};
+
+export type PurchaseRow = {
+  id: string;
+  user_id: string;
+  provider: string;
+  provider_ref: string;
+  product: string;
+  amount_jpy: number | null;
+  status: string;
+  created_at: string;
 };
 
 export type ListingRow = {

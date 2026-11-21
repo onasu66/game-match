@@ -130,11 +130,22 @@ class _ListingsScreenState extends State<ListingsScreen> {
                     return ListTile(
                       title: Text(l.game),
                       subtitle: Text(
-                        '${l.hostDisplayName} · ${l.memberCount}/${l.slots}人'
+                        '${l.hostDisplayName}${l.hostIsPremium ? ' ★' : ''} · ${l.memberCount}/${l.slots}人'
                         '${l.rankNote.isEmpty ? '' : ' · ${l.rankNote}'}'
                         '${l.voiceOptional ? ' · マイク任意' : ' · マイク希望'}',
                       ),
-                      trailing: const Icon(Icons.chevron_right),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (l.hostIsPremium)
+                            Icon(
+                              Icons.workspace_premium,
+                              size: 20,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
                       onTap: () async {
                         await Navigator.of(context).push(
                           MaterialPageRoute(

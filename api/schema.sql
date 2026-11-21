@@ -5,7 +5,9 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   birth_date TEXT NOT NULL,
   favorite_games TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  premium_until TEXT,
+  stripe_customer_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS listings (
@@ -30,5 +32,18 @@ CREATE TABLE IF NOT EXISTS memberships (
   FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS purchases (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  provider_ref TEXT NOT NULL UNIQUE,
+  product TEXT NOT NULL,
+  amount_jpy INTEGER,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_listings_game ON listings(game);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
+CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id);

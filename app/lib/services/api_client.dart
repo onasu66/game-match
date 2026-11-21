@@ -188,4 +188,41 @@ class ApiClient {
     );
     return CallCredentials.fromJson(data);
   }
+
+  Future<BillingStatus> billingStatus() async {
+    final data = await _json('GET', '/billing/status', auth: true);
+    return BillingStatus.fromJson(data);
+  }
+
+  Future<({String url, String sessionId})> createCheckout() async {
+    final data = await _json('POST', '/billing/checkout', auth: true, body: {});
+    return (
+      url: data['url'] as String,
+      sessionId: data['sessionId'] as String,
+    );
+  }
+
+  Future<({User user, BillingStatus status})> mockPurchase() async {
+    final data =
+        await _json('POST', '/billing/mock-purchase', auth: true, body: {});
+    return (
+      user: User.fromJson(data['user'] as Map<String, dynamic>),
+      status: BillingStatus.fromJson(data),
+    );
+  }
+
+  Future<({User user, BillingStatus status})> confirmCheckout(
+    String sessionId,
+  ) async {
+    final data = await _json(
+      'POST',
+      '/billing/confirm',
+      auth: true,
+      body: {'sessionId': sessionId},
+    );
+    return (
+      user: User.fromJson(data['user'] as Map<String, dynamic>),
+      status: BillingStatus.fromJson(data),
+    );
+  }
 }

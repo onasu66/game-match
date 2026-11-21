@@ -7,6 +7,31 @@ import type { MatchDb } from "./types.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const defaultDbPath = path.join(__dirname, "..", "data", "local.sqlite");
 
+function migrateLocalSchema(sqlite: Database.Database) {
+  const cols = sqlite.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("premium_until")) {
+    sqlite.exec("ALTER TABLE users ADD COLUMN premium_until TEXT");
+  }
+  if (!names.has("stripe_customer_id")) {
+    sqlite.exec("ALTER TABLE users ADD COLUMN stripe_customer_id TEXT");
+  }
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS purchases (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      provider_ref TEXT NOT NULL UNIQUE,
+      product TEXT NOT NULL,
+      amount_jpy INTEGER,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_purchases_user ON purchases(user_id);
+  `);
+}
+
 export function openLocalDb(dbPath = process.env.DB_PATH || defaultDbPath): MatchDb {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
   const sqlite = new Database(dbPath);
@@ -15,6 +40,7 @@ export function openLocalDb(dbPath = process.env.DB_PATH || defaultDbPath): Matc
 
   const schemaPath = path.join(__dirname, "..", "schema.sql");
   sqlite.exec(fs.readFileSync(schemaPath, "utf8"));
+  migrateLocalSchema(sqlite);
 
   return {
     async first<T>(sql: string, ...params: unknown[]) {

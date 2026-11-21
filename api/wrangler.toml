@@ -17,3 +17,11 @@ database_id = "1dcafdc4-076c-48d6-af29-ddd70c955639"
 # Optional override (defaults to wss://tuuwa-pq36hupv.livekit.cloud):
 #   npx wrangler secret put LIVEKIT_URL
 # Reuse the same LIVEKIT_* values already on Worker `wake60-calls` when available.
+# Billing (Stripe Web Checkout; native IAP is later):
+#   npx wrangler secret put STRIPE_SECRET_KEY
+#   npx wrangler secret put STRIPE_WEBHOOK_SECRET
+# Optional:
+#   npx wrangler secret put STRIPE_PRICE_ID
+#   npx wrangler secret put BILLING_SUCCESS_URL
+#   npx wrangler secret put BILLING_CANCEL_URL
+#   npx wrangler secret put ALLOW_MOCK_PURCHASE   # "0" to disable mock in prod

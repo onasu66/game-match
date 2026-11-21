@@ -100,7 +100,19 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
             children: [
               Text(l.game, style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 8),
-              Text('ホスト: ${l.hostDisplayName}'),
+              Row(
+                children: [
+                  Text('ホスト: ${l.hostDisplayName}'),
+                  if (l.hostIsPremium) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.workspace_premium,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ],
+                ],
+              ),
               Text('人数: ${l.memberCount}/${l.slots}'),
               if (l.rankNote.isNotEmpty) Text('ランク: ${l.rankNote}'),
               Text(l.voiceOptional ? 'マイク: 任意' : 'マイク: 希望あり'),
@@ -114,8 +126,14 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
               ...l.members.map(
                 (m) => ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(child: Icon(Icons.person)),
-                  title: Text(m.displayName),
+                  leading: CircleAvatar(
+                    child: Icon(
+                      m.isPremium ? Icons.workspace_premium : Icons.person,
+                    ),
+                  ),
+                  title: Text(
+                    m.isPremium ? '${m.displayName} · Premium' : m.displayName,
+                  ),
                   subtitle: Text(m.userId == l.hostId ? 'ホスト' : '参加者'),
                 ),
               ),
