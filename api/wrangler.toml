@@ -3,11 +3,12 @@ main = "src/worker.ts"
 compatibility_date = "2025-11-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Fill database_id after: npx wrangler d1 create game-match-db
 [[d1_databases]]
 binding = "DB"
 database_name = "game-match-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "REPLACE_AFTER_D1_CREATE"
 preview_database_id = "local-preview-db"
 
-[vars]
-JWT_SECRET = "dev-change-me-in-production"
+# JWT_SECRET must be set via: npx wrangler secret put JWT_SECRET
+# Do not commit production secrets here.
