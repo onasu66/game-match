@@ -172,6 +172,88 @@ async function main() {
     assert(third.status === 201, `premium second listing failed: ${JSON.stringify(third.json)}`);
   }
 
+  // Ratings + reports
+  const hostId = hostReg.json.user.id as string;
+  const guestId = guestReg.json.user.id as string;
+
+  const rateSelf = await req(`/listings/${listingId}/ratings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+    body: JSON.stringify({ toUserId: guestId, score: 5 }),
+  });
+  assert(rateSelf.status === 400, `expected 400 rating self, got ${rateSelf.status}`);
+
+  const rate = await req(`/listings/${listingId}/ratings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+    body: JSON.stringify({ toUserId: hostId, score: 5 }),
+  });
+  assert(rate.status === 201, `rate failed: ${JSON.stringify(rate.json)}`);
+  assert(rate.json.rating?.score === 5, "expected score 5");
+
+  const rateUpdate = await req(`/listings/${listingId}/ratings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+    body: JSON.stringify({ toUserId: hostId, score: 4 }),
+  });
+  assert(rateUpdate.status === 200, `rate update failed: ${JSON.stringify(rateUpdate.json)}`);
+  assert(rateUpdate.json.rating?.updated === true, "expected updated flag");
+
+  const outsiderRate = await req(`/listings/${listingId}/ratings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${outsiderToken}` },
+    body: JSON.stringify({ toUserId: hostId, score: 3 }),
+  });
+  assert(outsiderRate.status === 403, `expected 403 outsider rate, got ${outsiderRate.status}`);
+
+  const hostSummary = await req("/ratings/me", {
+    headers: { Authorization: `Bearer ${hostToken}` },
+  });
+  assert(hostSummary.status === 200, `ratings/me failed: ${JSON.stringify(hostSummary.json)}`);
+  assert(hostSummary.json.summary?.count === 1, "expected 1 rating received");
+  assert(hostSummary.json.summary?.averageScore === 4, "expected average 4");
+
+  const detailWithRatings = await req(`/listings/${listingId}`, {
+    headers: { Authorization: `Bearer ${guestToken}` },
+  });
+  assert(
+    detailWithRatings.json.listing.myRatings?.some(
+      (r: { toUserId: string; score: number }) =>
+        r.toUserId === hostId && r.score === 4,
+    ),
+    "expected myRatings on listing detail",
+  );
+
+  const reasons = await req("/reports/reasons", {
+    headers: { Authorization: `Bearer ${guestToken}` },
+  });
+  assert(reasons.status === 200, "reports/reasons failed");
+  assert(
+    Array.isArray(reasons.json.reasons) && reasons.json.reasons.length >= 4,
+    "expected report reasons",
+  );
+
+  const report = await req(`/listings/${listingId}/reports`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+    body: JSON.stringify({
+      reportedUserId: hostId,
+      reason: "harassment",
+      comment: "smoke test report",
+    }),
+  });
+  assert(report.status === 201, `report failed: ${JSON.stringify(report.json)}`);
+
+  const reportDup = await req(`/listings/${listingId}/reports`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+    body: JSON.stringify({
+      reportedUserId: hostId,
+      reason: "spam",
+    }),
+  });
+  assert(reportDup.status === 409, `expected 409 duplicate report, got ${reportDup.status}`);
+
   console.log("SMOKE OK");
   console.log(
     JSON.stringify(
@@ -186,6 +268,8 @@ async function main() {
           isPremium: billing.json.isPremium,
           mockPurchaseAvailable: billing.json.mockPurchaseAvailable,
         },
+        ratings: hostSummary.json.summary,
+        reportId: report.json.report?.id ?? null,
       },
       null,
       2,

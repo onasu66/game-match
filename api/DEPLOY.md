@@ -31,6 +31,9 @@ npx wrangler secret put LIVEKIT_API_SECRET
 # 3c) 課金スキーマ（既存 D1 向け。新規は schema.sql に含まれる）
 npx wrangler d1 execute game-match-db --remote --file=./migrations/001_billing.sql
 
+# 3c2) 評価・通報スキーマ（既存 D1 向け。新規は schema.sql に含まれる）
+npx wrangler d1 execute game-match-db --remote --file=./migrations/002_ratings_reports.sql
+
 # 3d) Stripe（Web Checkout。値をログに出さない）
 npx wrangler secret put STRIPE_SECRET_KEY
 npx wrangler secret put STRIPE_WEBHOOK_SECRET
