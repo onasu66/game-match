@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:game_match_app/app_theme.dart';
 import 'package:game_match_app/models/models.dart';
 import 'package:game_match_app/screens/call_screen.dart';
 import 'package:game_match_app/screens/listing_detail_screen.dart';
@@ -7,6 +8,8 @@ import 'package:game_match_app/services/api_client.dart';
 import 'package:game_match_app/services/session.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'font_loader.dart';
 
 class _FakeApi extends ApiClient {
   _FakeApi() : super(baseUrl: 'http://example.invalid');
@@ -43,7 +46,7 @@ class _FakeApi extends ApiClient {
 }
 
 void main() {
-  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(loadAppFonts);
 
   SessionController buildSession() {
     SharedPreferences.setMockInitialValues({
@@ -69,8 +72,9 @@ void main() {
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: buildSession(),
-        child: const MaterialApp(
-          home: ListingDetailScreen(listingId: 'listing-demo'),
+        child: MaterialApp(
+          theme: buildAppTheme(),
+          home: const ListingDetailScreen(listingId: 'listing-demo'),
         ),
       ),
     );
@@ -86,8 +90,9 @@ void main() {
     await tester.pumpWidget(
       ChangeNotifierProvider.value(
         value: buildSession(),
-        child: const MaterialApp(
-          home: CallScreen(listingId: 'listing-demo', gameTitle: 'Valorant'),
+        child: MaterialApp(
+          theme: buildAppTheme(),
+          home: const CallScreen(listingId: 'listing-demo', gameTitle: 'Valorant'),
         ),
       ),
     );
