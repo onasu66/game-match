@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
 
+import 'app_theme.dart';
 import 'screens/age_gate_screen.dart';
 import 'screens/auth_screen.dart';
 import 'screens/listings_screen.dart';
@@ -43,16 +44,7 @@ class _GameMatchAppState extends State<GameMatchApp> {
       child: MaterialApp(
         title: 'ゲーム通話',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF1F6F5F),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          inputDecorationTheme: const InputDecorationTheme(
-            border: OutlineInputBorder(),
-          ),
-        ),
+        theme: buildAppTheme(),
         home: Consumer<SessionController>(
           builder: (context, session, _) {
             if (!session.bootstrapped) {
