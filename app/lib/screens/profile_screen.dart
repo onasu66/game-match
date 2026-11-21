@@ -20,6 +20,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _billingBusy = false;
   BillingStatus? _billing;
   String? _billingError;
+  RatingSummary? _ratingSummary;
+  String? _ratingError;
 
   @override
   void initState() {
@@ -28,6 +30,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _name = TextEditingController(text: user.displayName);
     _favorites = {...user.favoriteGames};
     _loadBilling();
+    _loadRatings();
   }
 
   @override
@@ -50,6 +53,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (mounted) setState(() => _billingError = e.message);
     } catch (e) {
       if (mounted) setState(() => _billingError = e.toString());
+    }
+  }
+
+  Future<void> _loadRatings() async {
+    try {
+      final summary =
+          await context.read<SessionController>().api.myRatingSummary();
+      if (mounted) {
+        setState(() {
+          _ratingSummary = summary;
+          _ratingError = null;
+        });
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _ratingError = e.message);
+    } catch (e) {
+      if (mounted) setState(() => _ratingError = e.toString());
     }
   }
 
@@ -137,6 +157,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 : () async {
                     await context.read<SessionController>().refreshUser();
                     await _loadBilling();
+                    await _loadRatings();
                   },
             icon: const Icon(Icons.refresh),
           ),
@@ -198,6 +219,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onPressed: _busy ? null : _save,
             child: Text(_busy ? '保存中…' : '保存'),
           ),
+          const SizedBox(height: 32),
+          Text('受け取った評価', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (_ratingError != null)
+            Text(
+              _ratingError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            )
+          else if (_ratingSummary == null)
+            const Text('読み込み中…')
+          else if (_ratingSummary!.count == 0)
+            Text(
+              'まだ評価はありません',
+              style: Theme.of(context).textTheme.bodyMedium,
+            )
+          else
+            Text(
+              '平均 ${_ratingSummary!.averageScore?.toStringAsFixed(1) ?? '-'} / 5'
+              '（${_ratingSummary!.count}件）',
+            ),
           const SizedBox(height: 32),
           Text('プラン', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),

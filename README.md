@@ -20,7 +20,7 @@ game-match/
 
 初期タイトル固定: Apex Legends / League of Legends / Overwatch / ストリートファイター / Valorant / Minecraft
 
-非スコープ: 評価・通報、自動マッチ、ネイティブアプリ内課金（IAP）
+非スコープ: モデレーション管理画面、自動マッチ、ネイティブアプリ内課金（IAP）
 
 ## 通話の流れ
 
@@ -59,6 +59,7 @@ LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 - 詳細手順: `api/DEPLOY.md`
 - リポジトリ: https://github.com/onasu66/game-match
 - 課金スキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/001_billing.sql`
+- 評価・通報スキーマ: `npx wrangler d1 execute game-match-db --remote --file=./migrations/002_ratings_reports.sql`
 
 必要な Worker シークレット:
 
@@ -118,6 +119,8 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 3. 別アカウントでログインし、その募集に参加
 4. 詳細画面で参加者一覧を確認 →「通話ルームに入る」
 5. ミュートのまま参加できること、ミュート解除 / 退室ができること
+6. 募集詳細の参加者メニューから評価・通報できること
+7. プロフィールに受け取った評価の平均が表示されること
 
 ## エンドポイント概要
 
@@ -133,6 +136,10 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 | GET | `/listings/:id` | 詳細＋参加者 |
 | POST | `/listings/:id/join` | 参加 |
 | POST | `/listings/:id/call-token` | LiveKit `url` + `token`（参加者のみ） |
+| POST | `/listings/:id/ratings` | 参加者を星1〜5で評価（upsert） |
+| POST | `/listings/:id/reports` | 参加者を通報（理由 + 任意コメント） |
+| GET | `/ratings/me` | 自分への評価サマリ |
+| GET | `/reports/reasons` | 通報理由一覧 |
 | GET | `/billing/status` | プラン状態 |
 | POST | `/billing/checkout` | Stripe Checkout URL |
 | POST | `/billing/confirm` | Checkout 完了後の付与確認 |

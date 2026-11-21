@@ -39,6 +39,40 @@ export type MembershipRow = {
   joined_at: string;
 };
 
+export type RatingRow = {
+  id: string;
+  listing_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  score: number;
+  created_at: string;
+};
+
+export type ReportRow = {
+  id: string;
+  listing_id: string | null;
+  reporter_id: string;
+  reported_user_id: string;
+  reason: string;
+  comment: string;
+  created_at: string;
+};
+
+/** Fixed report reasons (client + server share labels via API). */
+export const REPORT_REASONS = [
+  "harassment",
+  "cheating",
+  "spam",
+  "inappropriate",
+  "other",
+] as const;
+
+export type ReportReason = (typeof REPORT_REASONS)[number];
+
+export function isValidReportReason(value: string): value is ReportReason {
+  return (REPORT_REASONS as readonly string[]).includes(value);
+}
+
 export type DbExecResult = {
   success: boolean;
   meta?: { changes?: number; last_row_id?: number };

@@ -27,7 +27,7 @@ class _FakeApi extends ApiClient {
       voiceOptional: true,
       status: 'open',
       createdAt: '2026-01-01T00:00:00Z',
-      memberCount: 1,
+      memberCount: 2,
       members: [
         Member(
           userId: 'u1',
@@ -35,7 +35,14 @@ class _FakeApi extends ApiClient {
           email: 'demo@example.com',
           joinedAt: '2026-01-01T00:00:00Z',
         ),
+        Member(
+          userId: 'u2',
+          displayName: 'GuestPlayer',
+          email: 'guest@example.com',
+          joinedAt: '2026-01-01T00:01:00Z',
+        ),
       ],
+      myRatings: const [MyRating(toUserId: 'u2', score: 4)],
     );
   }
 
@@ -80,6 +87,8 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('通話ルームに入る'), findsOneWidget);
+    expect(find.textContaining('評価・通報'), findsOneWidget);
+    expect(find.textContaining('あなたの評価: 4'), findsOneWidget);
     await expectLater(
       find.byType(MaterialApp),
       matchesGoldenFile('goldens/livekit_listing_call_button.png'),

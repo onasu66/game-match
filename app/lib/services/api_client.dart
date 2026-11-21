@@ -180,6 +180,57 @@ class ApiClient {
     return Listing.fromJson(data['listing'] as Map<String, dynamic>);
   }
 
+  Future<({String toUserId, int score, bool updated})> rateMember({
+    required String listingId,
+    required String toUserId,
+    required int score,
+  }) async {
+    final data = await _json(
+      'POST',
+      '/listings/$listingId/ratings',
+      auth: true,
+      body: {'toUserId': toUserId, 'score': score},
+    );
+    final rating = data['rating'] as Map<String, dynamic>;
+    return (
+      toUserId: rating['toUserId'] as String,
+      score: rating['score'] as int,
+      updated: rating['updated'] as bool? ?? false,
+    );
+  }
+
+  Future<void> reportMember({
+    required String listingId,
+    required String reportedUserId,
+    required String reason,
+    String comment = '',
+  }) async {
+    await _json(
+      'POST',
+      '/listings/$listingId/reports',
+      auth: true,
+      body: {
+        'reportedUserId': reportedUserId,
+        'reason': reason,
+        'comment': comment,
+      },
+    );
+  }
+
+  Future<RatingSummary> myRatingSummary() async {
+    final data = await _json('GET', '/ratings/me', auth: true);
+    return RatingSummary.fromJson(
+      data['summary'] as Map<String, dynamic>? ?? const {},
+    );
+  }
+
+  Future<List<ReportReason>> reportReasons() async {
+    final data = await _json('GET', '/reports/reasons', auth: true);
+    return (data['reasons'] as List<dynamic>? ?? [])
+        .map((e) => ReportReason.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<CallCredentials> callToken(String listingId) async {
     final data = await _json(
       'POST',

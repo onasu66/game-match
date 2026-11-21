@@ -70,6 +70,186 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     );
   }
 
+  Future<void> _rateMember(Listing listing, Member member) async {
+    final me = context.read<SessionController>().user;
+    if (me == null) return;
+    if (!listing.members.any((m) => m.userId == me.id)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('評価するには参加が必要です')),
+        );
+      }
+      return;
+    }
+
+    final current = listing.myScoreFor(member.userId) ?? 5;
+    var selected = current;
+    final score = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: Text('${member.displayName} を評価'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('1〜5の星で評価してください'),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: List.generate(5, (i) {
+                      final value = i + 1;
+                      return IconButton(
+                        onPressed: () => setLocal(() => selected = value),
+                        icon: Icon(
+                          value <= selected ? Icons.star : Icons.star_border,
+                          color: Theme.of(ctx).colorScheme.primary,
+                        ),
+                      );
+                    }),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, selected),
+                  child: const Text('送信'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (score == null || !mounted) return;
+
+    try {
+      await context.read<SessionController>().api.rateMember(
+            listingId: listing.id,
+            toUserId: member.userId,
+            score: score,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${member.displayName} を $score で評価しました')),
+      );
+      _reload();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
+  Future<void> _reportMember(Listing listing, Member member) async {
+    final me = context.read<SessionController>().user;
+    if (me == null) return;
+    if (!listing.members.any((m) => m.userId == me.id)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('通報するには参加が必要です')),
+        );
+      }
+      return;
+    }
+
+    final api = context.read<SessionController>().api;
+    List<ReportReason> reasons;
+    try {
+      reasons = await api.reportReasons();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      return;
+    }
+    if (!mounted || reasons.isEmpty) return;
+
+    var selectedReason = reasons.first.id;
+    final commentCtrl = TextEditingController();
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: Text('${member.displayName} を通報'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedReason,
+                      decoration: const InputDecoration(labelText: '理由'),
+                      items: reasons
+                          .map(
+                            (r) => DropdownMenuItem(
+                              value: r.id,
+                              child: Text(r.label),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) setLocal(() => selectedReason = v);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: commentCtrl,
+                      maxLines: 3,
+                      maxLength: 500,
+                      decoration: const InputDecoration(
+                        labelText: 'コメント（任意）',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('キャンセル'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('通報する'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    final comment = commentCtrl.text.trim();
+    commentCtrl.dispose();
+    if (submitted != true || !mounted) return;
+
+    try {
+      await api.reportMember(
+        listingId: listing.id,
+        reportedUserId: member.userId,
+        reason: selectedReason,
+        comment: comment,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('通報を受け付けました')),
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final me = context.watch<SessionController>().user;
@@ -122,9 +302,16 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
               ],
               const SizedBox(height: 24),
               Text('参加者', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                'マッチ後は参加者を評価・通報できます',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
               const SizedBox(height: 8),
-              ...l.members.map(
-                (m) => ListTile(
+              ...l.members.map((m) {
+                final isMe = me != null && m.userId == me.id;
+                final myScore = l.myScoreFor(m.userId);
+                return ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: CircleAvatar(
                     child: Icon(
@@ -134,9 +321,35 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                   title: Text(
                     m.isPremium ? '${m.displayName} · Premium' : m.displayName,
                   ),
-                  subtitle: Text(m.userId == l.hostId ? 'ホスト' : '参加者'),
-                ),
-              ),
+                  subtitle: Text(
+                    [
+                      m.userId == l.hostId ? 'ホスト' : '参加者',
+                      if (myScore != null) 'あなたの評価: $myScore',
+                    ].join(' · '),
+                  ),
+                  trailing: isMe || !already
+                      ? null
+                      : PopupMenuButton<String>(
+                          onSelected: (value) {
+                            if (value == 'rate') {
+                              _rateMember(l, m);
+                            } else if (value == 'report') {
+                              _reportMember(l, m);
+                            }
+                          },
+                          itemBuilder: (_) => [
+                            PopupMenuItem(
+                              value: 'rate',
+                              child: Text(myScore == null ? '評価する' : '評価を変更'),
+                            ),
+                            const PopupMenuItem(
+                              value: 'report',
+                              child: Text('通報する'),
+                            ),
+                          ],
+                        ),
+                );
+              }),
               if (_joinError != null) ...[
                 const SizedBox(height: 8),
                 Text(

@@ -117,6 +117,49 @@ class Member {
   }
 }
 
+class MyRating {
+  const MyRating({required this.toUserId, required this.score});
+
+  final String toUserId;
+  final int score;
+
+  factory MyRating.fromJson(Map<String, dynamic> json) {
+    return MyRating(
+      toUserId: json['toUserId'] as String,
+      score: json['score'] as int,
+    );
+  }
+}
+
+class RatingSummary {
+  RatingSummary({required this.count, this.averageScore});
+
+  final int count;
+  final double? averageScore;
+
+  factory RatingSummary.fromJson(Map<String, dynamic> json) {
+    final raw = json['averageScore'];
+    return RatingSummary(
+      count: json['count'] as int? ?? 0,
+      averageScore: raw == null ? null : (raw as num).toDouble(),
+    );
+  }
+}
+
+class ReportReason {
+  ReportReason({required this.id, required this.label});
+
+  final String id;
+  final String label;
+
+  factory ReportReason.fromJson(Map<String, dynamic> json) {
+    return ReportReason(
+      id: json['id'] as String,
+      label: json['label'] as String,
+    );
+  }
+}
+
 class Listing {
   Listing({
     required this.id,
@@ -132,6 +175,7 @@ class Listing {
     required this.memberCount,
     required this.members,
     this.hostIsPremium = false,
+    this.myRatings = const [],
   });
 
   final String id;
@@ -147,6 +191,14 @@ class Listing {
   final String createdAt;
   final int memberCount;
   final List<Member> members;
+  final List<MyRating> myRatings;
+
+  int? myScoreFor(String userId) {
+    for (final r in myRatings) {
+      if (r.toUserId == userId) return r.score;
+    }
+    return null;
+  }
 
   factory Listing.fromJson(Map<String, dynamic> json) {
     return Listing(
@@ -164,6 +216,9 @@ class Listing {
       memberCount: json['memberCount'] as int? ?? 0,
       members: (json['members'] as List<dynamic>? ?? [])
           .map((e) => Member.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      myRatings: (json['myRatings'] as List<dynamic>? ?? [])
+          .map((e) => MyRating.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
   }

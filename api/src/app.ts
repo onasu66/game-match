@@ -27,7 +27,14 @@ import {
   listingRoomName,
   type LiveKitConfig,
 } from "./livekit.js";
-import type { ListingRow, MatchDb, MembershipRow, UserRow } from "./types.js";
+import type {
+  ListingRow,
+  MatchDb,
+  MembershipRow,
+  RatingRow,
+  UserRow,
+} from "./types.js";
+import { isValidReportReason, REPORT_REASONS } from "./types.js";
 
 export type AppEnv = {
   Variables: {
@@ -101,6 +108,48 @@ async function listingDetail(db: MatchDb, listingId: string) {
       isPremium: isPremiumActive(m.premium_until),
     })),
   };
+}
+
+async function ratingSummaryForUser(db: MatchDb, userId: string) {
+  const row = await db.first<{ cnt: number; total: number | null }>(
+    `SELECT COUNT(*) as cnt, SUM(score) as total FROM ratings WHERE to_user_id = ?`,
+    userId,
+  );
+  const count = Number(row?.cnt ?? 0);
+  const total = Number(row?.total ?? 0);
+  const averageScore = count > 0 ? Math.round((total / count) * 10) / 10 : null;
+  return { averageScore, count };
+}
+
+async function myRatingsForListing(
+  db: MatchDb,
+  listingId: string,
+  fromUserId: string,
+) {
+  const rows = await db.all<Pick<RatingRow, "to_user_id" | "score">>(
+    `SELECT to_user_id, score FROM ratings
+     WHERE listing_id = ? AND from_user_id = ?`,
+    listingId,
+    fromUserId,
+  );
+  return rows.map((r) => ({ toUserId: r.to_user_id, score: r.score }));
+}
+
+async function assertListingMember(
+  db: MatchDb,
+  listingId: string,
+  userId: string,
+) {
+  const membership = await db.first<{ user_id: string }>(
+    "SELECT user_id FROM memberships WHERE listing_id = ? AND user_id = ?",
+    listingId,
+    userId,
+  );
+  if (!membership) {
+    throw new HTTPException(403, {
+      message: "この募集の参加者のみ操作できます",
+    });
+  }
 }
 
 async function grantPremium(opts: {
@@ -292,6 +341,14 @@ export function createApp(options: CreateAppOptions) {
     await authenticate(c);
     await next();
   });
+  app.use("/ratings/*", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
+  app.use("/reports/*", async (c, next) => {
+    await authenticate(c);
+    await next();
+  });
 
   async function authenticate(c: {
     req: { header: (name: string) => string | undefined };
@@ -453,9 +510,12 @@ export function createApp(options: CreateAppOptions) {
   });
 
   app.get("/listings/:id", async (c) => {
-    const detail = await listingDetail(c.get("db"), c.req.param("id"));
+    const db = c.get("db");
+    const listingId = c.req.param("id");
+    const detail = await listingDetail(db, listingId);
     if (!detail) throw new HTTPException(404, { message: "募集が見つかりません" });
-    return c.json({ listing: detail });
+    const myRatings = await myRatingsForListing(db, listingId, c.get("userId"));
+    return c.json({ listing: { ...detail, myRatings } });
   });
 
   app.post("/listings/:id/join", async (c) => {
@@ -554,6 +614,203 @@ export function createApp(options: CreateAppOptions) {
       token,
       roomName,
       identity: userId,
+    });
+  });
+
+  /** Rate another member of a listing (1–5 stars). Upserts per listing pair. */
+  app.post("/listings/:id/ratings", async (c) => {
+    const db = c.get("db");
+    const listingId = c.req.param("id");
+    const fromUserId = c.get("userId");
+    const body = await c.req.json<{ toUserId?: string; score?: number }>();
+    const toUserId = body.toUserId?.trim() ?? "";
+    const score = Number(body.score);
+
+    if (!toUserId) {
+      throw new HTTPException(400, { message: "評価対象が必要です" });
+    }
+    if (toUserId === fromUserId) {
+      throw new HTTPException(400, { message: "自分自身は評価できません" });
+    }
+    if (!Number.isInteger(score) || score < 1 || score > 5) {
+      throw new HTTPException(400, { message: "評価は1〜5にしてください" });
+    }
+
+    const listing = await db.first<ListingRow>(
+      "SELECT * FROM listings WHERE id = ?",
+      listingId,
+    );
+    if (!listing) {
+      throw new HTTPException(404, { message: "募集が見つかりません" });
+    }
+
+    await assertListingMember(db, listingId, fromUserId);
+    await assertListingMember(db, listingId, toUserId);
+
+    const existing = await db.first<RatingRow>(
+      `SELECT * FROM ratings
+       WHERE listing_id = ? AND from_user_id = ? AND to_user_id = ?`,
+      listingId,
+      fromUserId,
+      toUserId,
+    );
+    const createdAt = new Date().toISOString();
+    if (existing) {
+      await db.run(
+        "UPDATE ratings SET score = ?, created_at = ? WHERE id = ?",
+        score,
+        createdAt,
+        existing.id,
+      );
+      return c.json({
+        rating: {
+          id: existing.id,
+          listingId,
+          fromUserId,
+          toUserId,
+          score,
+          createdAt,
+          updated: true,
+        },
+      });
+    }
+
+    const id = uuidv4();
+    await db.run(
+      `INSERT INTO ratings (id, listing_id, from_user_id, to_user_id, score, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      id,
+      listingId,
+      fromUserId,
+      toUserId,
+      score,
+      createdAt,
+    );
+    return c.json(
+      {
+        rating: {
+          id,
+          listingId,
+          fromUserId,
+          toUserId,
+          score,
+          createdAt,
+          updated: false,
+        },
+      },
+      201,
+    );
+  });
+
+  /** Report another member from a listing context. */
+  app.post("/listings/:id/reports", async (c) => {
+    const db = c.get("db");
+    const listingId = c.req.param("id");
+    const reporterId = c.get("userId");
+    const body = await c.req.json<{
+      reportedUserId?: string;
+      reason?: string;
+      comment?: string;
+    }>();
+    const reportedUserId = body.reportedUserId?.trim() ?? "";
+    const reason = body.reason?.trim() ?? "";
+    const comment = (body.comment ?? "").trim().slice(0, 500);
+
+    if (!reportedUserId) {
+      throw new HTTPException(400, { message: "通報対象が必要です" });
+    }
+    if (reportedUserId === reporterId) {
+      throw new HTTPException(400, { message: "自分自身は通報できません" });
+    }
+    if (!isValidReportReason(reason)) {
+      throw new HTTPException(400, {
+        message: `理由は次から選んでください: ${REPORT_REASONS.join(", ")}`,
+      });
+    }
+
+    const listing = await db.first<ListingRow>(
+      "SELECT * FROM listings WHERE id = ?",
+      listingId,
+    );
+    if (!listing) {
+      throw new HTTPException(404, { message: "募集が見つかりません" });
+    }
+
+    await assertListingMember(db, listingId, reporterId);
+    const targetMember = await db.first<{ user_id: string }>(
+      "SELECT user_id FROM memberships WHERE listing_id = ? AND user_id = ?",
+      listingId,
+      reportedUserId,
+    );
+    if (!targetMember) {
+      throw new HTTPException(400, {
+        message: "この募集の参加者のみ通報できます",
+      });
+    }
+
+    const existing = await db.first<{ id: string }>(
+      `SELECT id FROM reports
+       WHERE listing_id = ? AND reporter_id = ? AND reported_user_id = ?`,
+      listingId,
+      reporterId,
+      reportedUserId,
+    );
+    if (existing) {
+      throw new HTTPException(409, {
+        message: "この募集では既に通報済みです",
+      });
+    }
+
+    const id = uuidv4();
+    const createdAt = new Date().toISOString();
+    await db.run(
+      `INSERT INTO reports
+       (id, listing_id, reporter_id, reported_user_id, reason, comment, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      id,
+      listingId,
+      reporterId,
+      reportedUserId,
+      reason,
+      comment,
+      createdAt,
+    );
+    return c.json(
+      {
+        report: {
+          id,
+          listingId,
+          reporterId,
+          reportedUserId,
+          reason,
+          comment,
+          createdAt,
+        },
+      },
+      201,
+    );
+  });
+
+  app.get("/ratings/me", async (c) => {
+    const summary = await ratingSummaryForUser(c.get("db"), c.get("userId"));
+    return c.json({ summary });
+  });
+
+  app.get("/reports/reasons", (c) => {
+    return c.json({
+      reasons: REPORT_REASONS.map((id) => ({
+        id,
+        label:
+          id === "harassment"
+            ? "ハラスメント"
+            : id === "cheating"
+              ? "チート疑惑"
+              : id === "spam"
+                ? "スパム"
+                : id === "inappropriate"
+                  ? "不適切行為"
+                  : "その他",
+      })),
     });
   });
 
