@@ -93,6 +93,45 @@ async function main() {
   });
   assert(detail.json.listing.members.some((m: { displayName: string }) => m.displayName === "GuestPlayer"));
 
+  // Non-member cannot get call token
+  const outsiderReg = await req("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({
+      email: `out_${stamp}@example.com`,
+      password: "password123",
+      displayName: "Outsider",
+      birthDate: "1999-06-01",
+    }),
+  });
+  assert(outsiderReg.status === 201, "outsider register failed");
+  const outsiderToken = outsiderReg.json.token as string;
+  const denied = await req(`/listings/${listingId}/call-token`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${outsiderToken}` },
+  });
+  assert(denied.status === 403, `expected 403 for non-member call, got ${denied.status}`);
+
+  const call = await req(`/listings/${listingId}/call-token`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${guestToken}` },
+  });
+  if (call.status === 503) {
+    console.log("LiveKit secrets not set locally — call-token returned 503 (expected without keys)");
+  } else {
+    assert(call.status === 200, `call-token failed: ${JSON.stringify(call.json)}`);
+    assert(typeof call.json.url === "string" && call.json.url.startsWith("wss://"), "missing LiveKit url");
+    assert(typeof call.json.token === "string" && call.json.token.length > 20, "missing LiveKit token");
+    assert(call.json.roomName === `listing-${listingId}`, "unexpected room name");
+    // Decode JWT payload (no verify) to confirm grants
+    const payloadB64 = (call.json.token as string).split(".")[1];
+    const payload = JSON.parse(
+      Buffer.from(payloadB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
+    );
+    assert(payload.video?.roomJoin === true, "token missing roomJoin");
+    assert(payload.video?.room === `listing-${listingId}`, "token room mismatch");
+    assert(typeof payload.sub === "string" && payload.sub.length > 0, "token sub missing");
+  }
+
   console.log("SMOKE OK");
   console.log(
     JSON.stringify(
@@ -101,6 +140,8 @@ async function main() {
         guestEmail,
         listingId,
         members: detail.json.listing.members.map((m: { displayName: string }) => m.displayName),
+        callTokenStatus: call.status,
+        roomName: call.json.roomName ?? null,
       },
       null,
       2,

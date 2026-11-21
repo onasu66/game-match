@@ -104,6 +104,29 @@ class Listing {
   }
 }
 
+class CallCredentials {
+  CallCredentials({
+    required this.url,
+    required this.token,
+    required this.roomName,
+    required this.identity,
+  });
+
+  final String url;
+  final String token;
+  final String roomName;
+  final String identity;
+
+  factory CallCredentials.fromJson(Map<String, dynamic> json) {
+    return CallCredentials(
+      url: json['url'] as String,
+      token: json['token'] as String,
+      roomName: json['roomName'] as String,
+      identity: json['identity'] as String? ?? '',
+    );
+  }
+}
+
 const kGames = <String>[
   'Apex Legends',
   'League of Legends',

@@ -45,5 +45,9 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>マッチ参加者との任意の音声通話に使用します。マイクなしでも参加できます。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>将来の映像通話用です。現在の通話は音声のみです。</string>
 </dict>
 </plist>

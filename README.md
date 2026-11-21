@@ -1,31 +1,59 @@
-# ゲーム通話 — マッチ体験 MVP
+# ゲーム通話 — マッチ + LiveKit 通話
 
-Flutter（Android / iOS / Web）クライアントと、マッチ用簡易 API（ローカル Node + SQLite / Cloudflare Worker + D1 対応）です。
+Flutter（Android / iOS / Web）クライアントと、マッチ用 API（ローカル Node + SQLite / Cloudflare Worker + D1）です。募集参加後に LiveKit 音声ルームへ入れます（マイク任意）。
 
 ## 認証方式
 
 **メールアドレス + パスワード（JWT）**
 
 - 登録時に生年月日必須。計算上 18 歳未満は `403` で拒否
+- 年齢確認済みユーザーのみ認証 API / 通話トークンを利用可能
 - トークンはクライアントの `SharedPreferences` に保存
 
 ## 構成
 
 ```
 game-match/
-  app/     Flutter クライアント
-  api/     マッチ API（Hono）
+  app/     Flutter クライアント（LiveKit クライアント接続）
+  api/     マッチ API（Hono）+ LiveKit AccessToken 発行
 ```
 
 初期タイトル固定: Apex Legends / League of Legends / Overwatch / ストリートファイター / Valorant / Minecraft
 
-非スコープ: LiveKit 通話接続、評価・通報、自動マッチ
+非スコープ: 評価・通報、自動マッチ
+
+## 通話の流れ
+
+1. ログイン（18+）→ 募集作成 or 参加
+2. 募集詳細で「通話ルームに入る」
+3. API `POST /listings/:id/call-token` が `{ url, token, roomName }` を返す
+4. アプリは鍵を持たず、受け取った `url` + `token` で LiveKit に接続
+5. 入室時はマイク OFF（聞き取り専用可）。ミュート解除 / 退室あり
+
+ルーム名: `listing-<listingId>`  
+LiveKit URL（既定）: `wss://tuuwa-pq36hupv.livekit.cloud`
 
 ## 本番デプロイ（Cloudflare）
 
 - Worker: https://game-match-api.0v09979.workers.dev
 - 詳細手順: `api/DEPLOY.md`
 - リポジトリ: https://github.com/onasu66/game-match
+
+必要な Worker シークレット:
+
+| 名前 | 説明 |
+|------|------|
+| `JWT_SECRET` | アプリ JWT（設定済み想定） |
+| `LIVEKIT_API_KEY` | LiveKit API Key（既存 `wake60-calls` と同値を推奨） |
+| `LIVEKIT_API_SECRET` | LiveKit API Secret |
+| `LIVEKIT_URL` | 任意。未設定時は上記 wss URL |
+
+```bash
+cd api
+npx wrangler secret put LIVEKIT_API_KEY
+npx wrangler secret put LIVEKIT_API_SECRET
+npm run cf:deploy
+```
 
 アプリから使う例:
 
@@ -37,35 +65,28 @@ flutter run --dart-define=API_BASE=https://game-match-api.0v09979.workers.dev
 
 ```bash
 cd api
-npm install
+npm install --legacy-peer-deps
+# 任意: LiveKit 鍵（値はログに出さない）
+export LIVEKIT_API_KEY=...
+export LIVEKIT_API_SECRET=...
 npm run start          # http://127.0.0.1:8787
-npm run test:smoke     # 別ターミナルで受け入れスモーク
+npm run test:smoke     # 別ターミナル
 ```
 
-Cloudflare Worker + D1 へデプロイする場合:
-
-```bash
-cd api
-# wrangler.toml の database_id を実 D1 に差し替え
-npx wrangler d1 execute game-match-db --file=./schema.sql
-npm run cf:deploy
-```
-
-既存通話 Worker の LiveKit 鍵は触りません（本 API は独立）。
+鍵未設定でもマッチ API のスモークは通る（`call-token` は 503）。
 
 ## アプリ起動
 
 ```bash
-export PATH="/opt/flutter/bin:$PATH"   # この VM の場合
+export PATH="/opt/flutter/bin:$PATH"
 cd app
 flutter pub get
 
-# Web（この VM でのデモ向け）
+# Web デモ
 flutter run -d chrome --web-browser-flag "--disable-web-security" \
   --dart-define=API_BASE=http://127.0.0.1:8787
 
-# Android 実機/エミュレータ
-# エミュレータなら API_BASE=http://10.0.2.2:8787
+# Android エミュレータ
 flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 ```
 
@@ -74,7 +95,8 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 1. 年齢確認で「18歳以上」→ 登録（生年月日が 18 未満なら API が拒否）
 2. 6 タイトルから募集作成（マイク任意フラグ付き）
 3. 別アカウントでログインし、その募集に参加
-4. 詳細画面で参加者一覧を確認
+4. 詳細画面で参加者一覧を確認 →「通話ルームに入る」
+5. ミュートのまま参加できること、ミュート解除 / 退室ができること
 
 ## エンドポイント概要
 
@@ -89,3 +111,4 @@ flutter run --dart-define=API_BASE=http://10.0.2.2:8787
 | POST | `/listings` | 作成 |
 | GET | `/listings/:id` | 詳細＋参加者 |
 | POST | `/listings/:id/join` | 参加 |
+| POST | `/listings/:id/call-token` | LiveKit `url` + `token`（参加者のみ） |

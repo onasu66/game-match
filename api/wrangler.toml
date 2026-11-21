@@ -10,5 +10,10 @@ binding = "DB"
 database_name = "game-match-db"
 database_id = "1dcafdc4-076c-48d6-af29-ddd70c955639"
 
-# JWT_SECRET is set via: npx wrangler secret put JWT_SECRET
-# Do not commit production secrets here.
+# Secrets (do not commit values):
+#   npx wrangler secret put JWT_SECRET
+#   npx wrangler secret put LIVEKIT_API_KEY
+#   npx wrangler secret put LIVEKIT_API_SECRET
+# Optional override (defaults to wss://tuuwa-pq36hupv.livekit.cloud):
+#   npx wrangler secret put LIVEKIT_URL
+# Reuse the same LIVEKIT_* values already on Worker `wake60-calls` when available.

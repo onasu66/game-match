@@ -179,4 +179,13 @@ class ApiClient {
     final data = await _json('POST', '/listings/$id/join', auth: true);
     return Listing.fromJson(data['listing'] as Map<String, dynamic>);
   }
+
+  Future<CallCredentials> callToken(String listingId) async {
+    final data = await _json(
+      'POST',
+      '/listings/$listingId/call-token',
+      auth: true,
+    );
+    return CallCredentials.fromJson(data);
+  }
 }
