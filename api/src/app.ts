@@ -501,14 +501,6 @@ export function createApp(options: CreateAppOptions) {
    * Mic is optional on the client; this token still allows publish so unmute works later.
    */
   app.post("/listings/:id/call-token", async (c) => {
-    const livekit = c.get("livekit");
-    if (!livekit) {
-      throw new HTTPException(503, {
-        message:
-          "LiveKit が未設定です（LIVEKIT_API_KEY / LIVEKIT_API_SECRET が必要）",
-      });
-    }
-
     const db = c.get("db");
     const listingId = c.req.param("id");
     const userId = c.get("userId");
@@ -538,6 +530,14 @@ export function createApp(options: CreateAppOptions) {
     if (!user || !isAtLeast18(user.birth_date)) {
       throw new HTTPException(403, {
         message: "年齢確認済みのユーザーのみ通話できます",
+      });
+    }
+
+    const livekit = c.get("livekit");
+    if (!livekit) {
+      throw new HTTPException(503, {
+        message:
+          "LiveKit が未設定です（LIVEKIT_API_KEY / LIVEKIT_API_SECRET が必要）",
       });
     }
 
