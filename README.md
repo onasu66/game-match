@@ -21,6 +21,18 @@ game-match/
 
 非スコープ: LiveKit 通話接続、評価・通報、自動マッチ
 
+## 本番デプロイ（Cloudflare）
+
+- Worker: https://game-match-api.0v09979.workers.dev
+- 詳細手順: `api/DEPLOY.md`
+- リポジトリ: https://github.com/onasu66/game-match
+
+アプリから使う例:
+
+```bash
+flutter run --dart-define=API_BASE=https://game-match-api.0v09979.workers.dev
+```
+
 ## API 起動（ローカル）
 
 ```bash

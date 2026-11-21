@@ -36,3 +36,9 @@ curl -s https://<worker-host>/games
 npm run start          # SQLite on :8787
 npm run test:smoke
 ```
+
+## 現在のデプロイ
+
+- URL: https://game-match-api.0v09979.workers.dev
+- D1: `game-match-db`（database_id は wrangler.toml 参照）
+- JWT_SECRET: Worker secret として設定済み（値はリポジトリに含めない）
